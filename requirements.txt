@@ -1,0 +1,10 @@
+pymongo
+langgraph 
+langchain-openai 
+pydantic 
+bcrypt
+streamlit
+uvicorn
+fastapi
+python-multipart
+langchain-ollama

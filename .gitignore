@@ -1,0 +1,112 @@
+# Project .gitignore — Python backend + Node frontend (Vite) + common OS/IDE
+
+# ------------------------
+# Python
+# ------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging / distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+coverage/
+htmlcov/
+
+# Type checkers / caches
+.mypy_cache/
+.pyre/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment / secret files
+.env
+.env.*
+secrets.yml
+
+# Database files
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# ------------------------
+# Node / Frontend
+# ------------------------
+node_modules/
+frontend/node_modules/
+
+# Vite / build outputs
+dist/
+frontend/dist/
+build/
+frontend/build/
+.vite/
+.parcel-cache/
+.cache/
+
+# npm/Yarn logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Lockfiles (keep if you prefer committing them)
+# package-lock.json
+# yarn.lock
+
+# ------------------------
+# Editor / OS
+# ------------------------
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# JetBrains
+*.iml
+
+# History / metadata
+.history/
+
+# Certificates / keys
+*.pem
+*.key
+*.crt
+
+# Temporary files
+*.swp
+*~
+
+# Jupyter checkpoints
+.ipynb_checkpoints
+
+# End of .gitignore
