@@ -28,9 +28,14 @@ const ChatInterface = ({ user, onLogout }) => {
 
     try {
       await axios.post('http://localhost:8000/reset_chat', {
-        user_id: user.user_id,
+        token: user.token,
       });
     } catch (err) {
+      if (err.response?.status === 401) {
+        // Token expired, logout
+        onLogout();
+        return;
+      }
       // Even if backend fails, still clear local history for UX
     } finally {
       setMessages([
@@ -55,12 +60,18 @@ const ChatInterface = ({ user, onLogout }) => {
     try {
       const res = await axios.post('http://localhost:8000/chat', {
         message: userMsg,
-        user_id: user.user_id
+        token: user.token
       });
 
       setMessages(prev => [...prev, { role: 'bot', content: res.data.response }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'bot', content: "Sorry, I encountered an error processing your request." }]);
+      if (err.response?.status === 401) {
+        // Token expired, logout
+        setMessages(prev => [...prev, { role: 'bot', content: "Your session has expired. Please login again." }]);
+        setTimeout(() => onLogout(), 2000);
+      } else {
+        setMessages(prev => [...prev, { role: 'bot', content: "Sorry, I encountered an error processing your request." }]);
+      }
     } finally {
       setLoading(false);
     }
@@ -76,7 +87,9 @@ const ChatInterface = ({ user, onLogout }) => {
           </div>
           <div>
             <h1 className="font-bold text-white">Task Assistant</h1>
-            <p className="text-xs text-slate-400">Connected as {user.user_name}</p>
+            <p className="text-xs text-slate-400">
+              {user.user_name} ({user.email})
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">

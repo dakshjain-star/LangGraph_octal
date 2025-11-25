@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import uvicorn
 import bcrypt
+import uuid
+import secrets
+from datetime import datetime, timedelta
 from langchain_core.messages import HumanMessage, AIMessage
 from main import app as graph_app, db
 
@@ -19,8 +22,11 @@ app.add_middleware(
 )
 
 # In-memory session store
-# Format: {user_id: {"messages": [], "user_name": str}}
+# Format: {user_id: {"messages": [], "user_name": str, "email": str}}
 sessions: Dict[str, Dict[str, Any]] = {}
+
+# Token store: {token: {"user_id": str, "email": str, "user_name": str, "expires_at": datetime}}
+token_store: Dict[str, Dict[str, Any]] = {}
 
 class LoginRequest(BaseModel):
     email: str
@@ -28,43 +34,73 @@ class LoginRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    user_id: str
+    token: str
 
 
 class ResetChatRequest(BaseModel):
-    user_id: str
+    token: str
+
+
+class VerifyTokenRequest(BaseModel):
+    token: str
 
 @app.post("/login")
 def login(req: LoginRequest):
     user = db.users.find_one({"email": req.email})
     if user and bcrypt.checkpw(req.password.encode('utf-8'), user['password']):
         user_id = str(user["_id"])
-        # Initialize session if not exists
+        
+        # Generate unique session token
+        token = secrets.token_urlsafe(32)
+        
+        # Store token with expiry (30 days)
+        token_store[token] = {
+            "user_id": user_id,
+            "email": req.email,
+            "user_name": user["first_name"],
+            "expires_at": datetime.now() + timedelta(days=30)
+        }
+        
+        # Initialize or reuse session for this user_id
         if user_id not in sessions:
             sessions[user_id] = {
                 "messages": [],
                 "user_id": user_id,
-                "user_name": user["first_name"]
+                "user_name": user["first_name"],
+                "email": req.email
             }
         
         return {
+            "token": token,
             "user_id": user_id,
             "user_name": user["first_name"],
+            "email": req.email,
             "status": "success"
         }
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    user_id = req.user_id
+    # Verify token
+    if req.token not in token_store:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    token_data = token_store[req.token]
+    
+    # Check if token has expired
+    if token_data["expires_at"] < datetime.now():
+        del token_store[req.token]
+        raise HTTPException(status_code=401, detail="Token expired")
+    
+    user_id = token_data["user_id"]
+    
+    # Initialize session if it doesn't exist (e.g., after server restart)
     if user_id not in sessions:
-        # Try to recover session if user exists in DB but server restarted
-        # For now, just re-init empty session or fail
-        # Let's re-init for robustness if we trust the ID (in real app, verify token)
         sessions[user_id] = {
             "messages": [],
             "user_id": user_id,
-            "user_name": "User"
+            "user_name": token_data["user_name"],
+            "email": token_data["email"]
         }
     
     session = sessions[user_id]
@@ -107,17 +143,54 @@ def chat(req: ChatRequest):
 @app.post("/reset_chat")
 def reset_chat(req: ResetChatRequest):
     """Clear the in-memory chat history for a given user."""
-    user_id = req.user_id
+    # Verify token
+    if req.token not in token_store:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    token_data = token_store[req.token]
+    user_id = token_data["user_id"]
+    
     if user_id in sessions:
         user_name = sessions[user_id].get("user_name", "User")
+        email = sessions[user_id].get("email", "")
         sessions[user_id] = {
             "messages": [],
             "user_id": user_id,
             "user_name": user_name,
+            "email": email
         }
         return {"status": "success"}
     # If session doesn't exist, treat as success so UI stays simple
     return {"status": "success"}
+
+@app.post("/verify_token")
+def verify_token(req: VerifyTokenRequest):
+    """Verify if a token is valid and return user data."""
+    if req.token not in token_store:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    token_data = token_store[req.token]
+    
+    # Check if token has expired
+    if token_data["expires_at"] < datetime.now():
+        del token_store[req.token]
+        raise HTTPException(status_code=401, detail="Token expired")
+    
+    return {
+        "user_id": token_data["user_id"],
+        "user_name": token_data["user_name"],
+        "email": token_data["email"],
+        "status": "success"
+    }
+
+
+@app.post("/logout")
+def logout(req: VerifyTokenRequest):
+    """Logout by invalidating the token."""
+    if req.token in token_store:
+        del token_store[req.token]
+    return {"status": "success"}
+
 
 @app.get("/health")
 def health():
