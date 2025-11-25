@@ -30,6 +30,10 @@ class ChatRequest(BaseModel):
     message: str
     user_id: str
 
+
+class ResetChatRequest(BaseModel):
+    user_id: str
+
 @app.post("/login")
 def login(req: LoginRequest):
     user = db.users.find_one({"email": req.email})
@@ -99,9 +103,26 @@ def chat(req: ChatRequest):
         print(f"Error processing chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/reset_chat")
+def reset_chat(req: ResetChatRequest):
+    """Clear the in-memory chat history for a given user."""
+    user_id = req.user_id
+    if user_id in sessions:
+        user_name = sessions[user_id].get("user_name", "User")
+        sessions[user_id] = {
+            "messages": [],
+            "user_id": user_id,
+            "user_name": user_name,
+        }
+        return {"status": "success"}
+    # If session doesn't exist, treat as success so UI stays simple
+    return {"status": "success"}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Run the FastAPI application (not the LangGraph compiled app)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

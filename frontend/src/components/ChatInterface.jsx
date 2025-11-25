@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User as UserIcon, LogOut, Loader2 } from 'lucide-react';
+import { Send, Bot, User as UserIcon, LogOut, Loader2, RotateCcw } from 'lucide-react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -11,6 +11,7 @@ const ChatInterface = ({ user, onLogout }) => {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -20,6 +21,27 @@ const ChatInterface = ({ user, onLogout }) => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  const handleResetChat = async () => {
+    if (loading || resetting) return;
+    setResetting(true);
+
+    try {
+      await axios.post('http://localhost:8000/reset_chat', {
+        user_id: user.user_id,
+      });
+    } catch (err) {
+      // Even if backend fails, still clear local history for UX
+    } finally {
+      setMessages([
+        {
+          role: 'bot',
+          content: `Hello ${user.user_name}! I've cleared our previous conversation. How can I help you now?`,
+        },
+      ]);
+      setResetting(false);
+    }
+  };
 
   const handleSend = async (e) => {
     e.preventDefault();
@@ -57,13 +79,27 @@ const ChatInterface = ({ user, onLogout }) => {
             <p className="text-xs text-slate-400">Connected as {user.user_name}</p>
           </div>
         </div>
-        <button 
-          onClick={onLogout}
-          className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
-          title="Logout"
-        >
-          <LogOut className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleResetChat}
+            disabled={loading || resetting}
+            className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors disabled:opacity-50"
+            title="Reset chat history"
+          >
+            {resetting ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <RotateCcw className="w-5 h-5" />
+            )}
+          </button>
+          <button 
+            onClick={onLogout}
+            className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
+            title="Logout"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
       {/* Chat Area */}

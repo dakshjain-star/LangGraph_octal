@@ -101,12 +101,26 @@ def view_my_tasks(current_user_id: str):
     # Return structured JSON for the LLM to parse easily
     task_list = []
     for t in tasks:
-        # Fetch names for display
+        # Fetch full user details for display
         assignee_doc = db.users.find_one({"_id": t.get("assignee")})
         assigner_doc = db.users.find_one({"_id": t.get("assigned_by")})
         
-        assignee_name = assignee_doc.get("first_name", "Unknown") if assignee_doc else "Unknown"
-        assigner_name = assigner_doc.get("first_name", "Unknown") if assigner_doc else "Unknown"
+        # Build full name with email (no user ID)
+        if assignee_doc:
+            assignee_first = assignee_doc.get("first_name", "")
+            assignee_last = assignee_doc.get("last_name", "")
+            assignee_email = assignee_doc.get("email", "")
+            assignee_display = f"{assignee_first} {assignee_last}, {assignee_email}".strip()
+        else:
+            assignee_display = "Unknown"
+        
+        if assigner_doc:
+            assigner_first = assigner_doc.get("first_name", "")
+            assigner_last = assigner_doc.get("last_name", "")
+            assigner_email = assigner_doc.get("email", "")
+            assigner_display = f"{assigner_first} {assigner_last}, {assigner_email}".strip()
+        else:
+            assigner_display = "Unknown"
 
         task_list.append({
             "id": str(t['_id']),
@@ -115,8 +129,8 @@ def view_my_tasks(current_user_id: str):
             "priority": t.get('priority', 'Normal'),
             "start_date": t.get('start_date', 'N/A'),
             "end_date": t.get('end_date', 'TBD'),
-            "assigned_by": f"{assigner_name} ({str(t.get('assigned_by', 'N/A'))})",
-            "assignee": f"{assignee_name} ({str(t.get('assignee', 'N/A'))})"
+            "assigned_by": assigner_display,
+            "assignee": assignee_display
         })
     return json.dumps(task_list)
 
@@ -230,8 +244,8 @@ Task Workflow Rules:
      * **Priority:** <priority>
      * **Start Date:** <start>
      * **End Date:** <end>
-     * **Assigned By:** <name + id>
-     * **Assignee:** <name + id>
+     * **Assigned By:** <full name, email>
+     * **Assignee:** <full name, email>
 7. If required fields are missing, ask for them before executing 'create_task'.
 """
 
