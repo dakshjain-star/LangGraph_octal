@@ -8,3 +8,5 @@ uvicorn
 fastapi
 python-multipart
 langchain-ollama
+PyJWT
+python-jose[cryptography]

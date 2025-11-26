@@ -11,11 +11,13 @@ import bcrypt
 import warnings
 import json
 from datetime import datetime, timedelta
-import secrets
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body, Header
+from fastapi import FastAPI, HTTPException, Body, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+import jwt
+from jwt.exceptions import InvalidTokenError
 
 # Import from new modules
 from model import db
@@ -23,6 +25,33 @@ from tools import tools
 
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_core")
 warnings.filterwarnings("ignore", message=".*Pydantic V1.*")
+
+# JWT Configuration
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-use-env-variable")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 30
+
+# JWT Helper Functions
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create a JWT access token."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def decode_access_token(token: str):
+    """Decode and verify JWT token."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except InvalidTokenError:
+        return None
+
+security = HTTPBearer()
 
 # --- State Definition ---
 class AgentState(TypedDict):
@@ -41,31 +70,6 @@ llm = ChatOllama(
 ).bind_tools(tools)
 
 # --- Nodes ---
-
-def login_node(state: AgentState):
-    """Simple login logic."""
-    last_msg = state["messages"][-1]
-    content = last_msg.content.lower()
-    
-    if "login" in content:
-        try:
-            parts = last_msg.content.split()
-            # login <email> <pass>
-            email = parts[1]
-            password = parts[2]
-            
-            user = db.users.find_one({"email": email})
-            if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
-                return {
-                    "user_id": str(user["_id"]),
-                    "user_name": user["first_name"],
-                    "messages": [SystemMessage(content=f"Login successful. Welcome {user['first_name']}.")]
-                }
-        except:
-            pass
-    
-    return {"messages": [SystemMessage(content="Please log in first: login <email> <password>")]}
-
 
 def build_system_prompt(user_id: Optional[str], user_name: Optional[str]) -> str:
     """Create a dynamic MongoDB-only system prompt with rotating guidance."""
@@ -137,13 +141,8 @@ tool_node = ToolNode(tools)
 # --- Graph Construction ---
 workflow = StateGraph(AgentState)
 
-workflow.add_node("login_gate", login_node)
 workflow.add_node("chatbot", chatbot_node)
 workflow.add_node("tools", tool_node)
-
-def route_check(state: AgentState):
-    if state.get("user_id"): return "chatbot"
-    return "login_gate"
 
 def should_continue(state: AgentState):
     last_message = state["messages"][-1]
@@ -151,8 +150,7 @@ def should_continue(state: AgentState):
         return "tools"
     return END
 
-workflow.add_conditional_edges(START, route_check)
-workflow.add_edge("login_gate", END)
+workflow.add_edge(START, "chatbot")
 workflow.add_conditional_edges("chatbot", should_continue)
 workflow.add_edge("tools", "chatbot")
 
@@ -177,9 +175,6 @@ api_app.add_middleware(
 # Format: {user_id: {"messages": [], "user_name": str, "email": str}}
 sessions: Dict[str, Dict[str, Any]] = {}
 
-# Token store: {token: {"user_id": str, "email": str, "user_name": str, "expires_at": datetime}}
-token_store: Dict[str, Dict[str, Any]] = {}
-
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -200,16 +195,13 @@ def login(req: LoginRequest):
     if user and bcrypt.checkpw(req.password.encode('utf-8'), user['password']):
         user_id = str(user["_id"])
         
-        # Generate unique session token
-        token = secrets.token_urlsafe(32)
-        
-        # Store token with expiry (30 days)
-        token_store[token] = {
-            "user_id": user_id,
+        # Create JWT token with user data
+        token_data = {
+            "sub": user_id,
             "email": req.email,
-            "user_name": user["first_name"],
-            "expires_at": datetime.now() + timedelta(days=30)
+            "user_name": user["first_name"]
         }
+        access_token = create_access_token(data=token_data)
         
         # Initialize or reuse session for this user_id
         if user_id not in sessions:
@@ -221,7 +213,7 @@ def login(req: LoginRequest):
             }
         
         return {
-            "token": token,
+            "token": access_token,
             "user_id": user_id,
             "user_name": user["first_name"],
             "email": req.email,
@@ -231,18 +223,21 @@ def login(req: LoginRequest):
 
 @api_app.post("/chat")
 def chat(req: ChatRequest):
-    # Verify token
-    if req.token not in token_store:
+    # Verify and decode JWT token
+    payload = decode_access_token(req.token)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     
-    token_data = token_store[req.token]
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     
-    # Check if token has expired
-    if token_data["expires_at"] < datetime.now():
-        del token_store[req.token]
-        raise HTTPException(status_code=401, detail="Token expired")
-    
-    user_id = token_data["user_id"]
+    # Extract user data from token
+    token_data = {
+        "user_id": user_id,
+        "email": payload.get("email"),
+        "user_name": payload.get("user_name")
+    }
     
     # Initialize session if it doesn't exist (e.g., after server restart)
     if user_id not in sessions:
@@ -293,12 +288,14 @@ def chat(req: ChatRequest):
 @api_app.post("/reset_chat")
 def reset_chat(req: ResetChatRequest):
     """Clear the in-memory chat history for a given user."""
-    # Verify token
-    if req.token not in token_store:
+    # Verify and decode JWT token
+    payload = decode_access_token(req.token)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     
-    token_data = token_store[req.token]
-    user_id = token_data["user_id"]
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     
     if user_id in sessions:
         user_name = sessions[user_id].get("user_name", "User")
@@ -316,29 +313,33 @@ def reset_chat(req: ResetChatRequest):
 @api_app.post("/verify_token")
 def verify_token(req: VerifyTokenRequest):
     """Verify if a token is valid and return user data."""
-    if req.token not in token_store:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    # Verify and decode JWT token
+    payload = decode_access_token(req.token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
-    token_data = token_store[req.token]
-    
-    # Check if token has expired
-    if token_data["expires_at"] < datetime.now():
-        del token_store[req.token]
-        raise HTTPException(status_code=401, detail="Token expired")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     
     return {
-        "user_id": token_data["user_id"],
-        "user_name": token_data["user_name"],
-        "email": token_data["email"],
+        "user_id": user_id,
+        "user_name": payload.get("user_name"),
+        "email": payload.get("email"),
         "status": "success"
     }
 
 
 @api_app.post("/logout")
 def logout(req: VerifyTokenRequest):
-    """Logout by invalidating the token."""
-    if req.token in token_store:
-        del token_store[req.token]
+    """Logout endpoint. JWT tokens are stateless, so this just validates the token."""
+    # Verify token is valid (optional validation)
+    payload = decode_access_token(req.token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    # With JWT, logout is handled client-side by removing the token
+    # No server-side state to clear
     return {"status": "success"}
 
 
