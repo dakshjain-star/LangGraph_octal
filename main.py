@@ -72,48 +72,36 @@ llm = ChatOllama(
 # --- Nodes ---
 
 def build_system_prompt(user_id: Optional[str], user_name: Optional[str]) -> str:
-    """Create a dynamic MongoDB-only system prompt with rotating guidance."""
-    mongo_roles = [
-        "Act as a MongoDB-only assistant focused on data modeling, Atlas collections, and CRUD workflows.",
-        "You are a MongoDB CRUD co-pilot dedicated exclusively to database records, documents, and query operations.",
-        "Serve as a MongoDB data concierge who only reasons about collections, documents, indexes, and CRUD lifecycles."
-    ]
-    refusal_lines = [
-        "Politely refuse any request that is not about MongoDB data access, modeling, or CRUD operations and redirect the user back to those topics.",
-        "Decline every non-MongoDB topic with a short reminder that you only operate on MongoDB data and CRUD actions.",
-        "If the conversation drifts away from MongoDB CRUD or data-centric needs, immediately refuse and restate the MongoDB-only charter."
+    """Create a dynamic task management system prompt with rotating guidance."""
+    assistant_roles = [
+        "You are a helpful Task Management Assistant that helps users create, view, update, and delete tasks.",
+        "Act as a Task Assistant focused on helping users manage their work assignments and deadlines.",
+        "You are a Task Management co-pilot dedicated to helping users organize and track their tasks."
     ]
     greeting_rules = [
-        "Detect greetings (hi, hello, hey, morning, evening, namaste, etc.) and respond starting with 'Hello {display_name}' followed by a MongoDB-only reminder.",
-        "Whenever the user greets you, lead with 'Hello {display_name}' (no self-introduction) and quickly steer the chat toward MongoDB CRUD work.",
-        "Respond to any greeting or pleasantry by opening with 'Hello {display_name}' then restating that you only help with MongoDB data, collections, and CRUD questions."
-    ]
-    courtesy_rules = [
-        "If users only greet or thank you, keep the reply short, friendly, and gently steer them toward MongoDB CRUD assistance without mentioning the current time or your own name.",
-        "Vary your greeting tone so consecutive salutations feel fresh while still emphasizing the MongoDB-only charter and avoid saying 'I'm <name>'."
+        "Detect greetings (hi, hello, hey, morning, evening, namaste, etc.) and respond warmly starting with 'Hello {display_name}!'",
+        "When users greet you, respond with 'Hello {display_name}!' and ask how you can help with their tasks.",
+        "Respond to greetings by saying 'Hello {display_name}!' and offering task management assistance."
     ]
 
-    time_hint = datetime.now().strftime("%A %I:%M %p")
     display_name = user_name or "there"
     greeting_instruction = random.choice(greeting_rules).format(display_name=display_name)
-    courtesy_instruction = random.choice(courtesy_rules)
 
     return f"""
-{random.choice(mongo_roles)}
+{random.choice(assistant_roles)}
 Current User ID: {user_id}.
 
 General Behavior:
-- {random.choice(refusal_lines)}
-- Never discuss topics outside MongoDB databases, Atlas data, document schemas, aggregation, indexing, or CRUD tooling. If a user goes off-topic, decline and redirect them to MongoDB CRUD needs.
+- Be helpful, friendly, and concise in your responses.
 - {greeting_instruction}
-- {courtesy_instruction}
+- When users say thank you, respond politely and ask if they need anything else.
 
 Task Workflow Rules:
 1. ALWAYS pass '{user_id}' as the 'current_user_id' argument when invoking any tool.
 2. Do not fabricate task IDs; use only the IDs returned by the 'view_my_tasks' tool.
 3. When creating a task you MUST collect Title, Start Date (YYYY-MM-DD), End Date (YYYY-MM-DD), and Assignee Email. Ask for optional Description and Priority.
 4. The 'assigned_by' field is implicitly the current user ({user_id}); never ask the user for it.
-5. Call 'list_users' when the user needs available teammates or emails.
+5. When user asks to "show users", "list users", or "who can I assign tasks to", call the 'list_users' tool with the current_user_id.
 6. Present task lists as bulleted items with nested fields exactly like:
    * **Task Title** (ID: <id>)
      * **Description:** <desc>
@@ -349,4 +337,4 @@ def health():
 
 if __name__ == "__main__":
     # Run the FastAPI application
-    uvicorn.run(api_app, host="0.0.0.0", port=8000)
+    uvicorn.run(api_app, host="0.0.0.0", port=8080)

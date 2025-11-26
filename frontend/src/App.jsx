@@ -14,7 +14,7 @@ function App() {
       
       if (storedToken) {
         try {
-          const res = await axios.post('http://localhost:8000/verify_token', {
+          const res = await axios.post('http://localhost:8080/verify_token', {
             token: storedToken
           });
           
@@ -47,7 +47,7 @@ function App() {
     // Call logout endpoint to invalidate token
     if (user?.token) {
       try {
-        await axios.post('http://localhost:8000/logout', {
+        await axios.post('http://localhost:8080/logout', {
           token: user.token
         });
       } catch (err) {

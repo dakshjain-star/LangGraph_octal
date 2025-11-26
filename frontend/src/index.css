@@ -18,6 +18,9 @@ body {
 /* Enhanced Markdown Styling */
 .prose {
   color: #e2e8f0;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .prose strong {

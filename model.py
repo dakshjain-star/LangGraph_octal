@@ -29,3 +29,20 @@ class Task(BaseModel):
     assigned_by: Any  # ObjectId
     assignee: Any  # ObjectId
     timestamp: datetime
+
+class Project(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    name: str
+    description: Optional[str] = ""
+    client_name: str
+    owner_name: str
+    assignees: list[Any] = []  # List of ObjectIds
+
+class Company(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    name: str
+    owner_name: str
+    projects: list[Any] = []  # List of ObjectIds
+    members: list[Any] = []  # List of ObjectIds

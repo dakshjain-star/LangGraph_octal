@@ -27,7 +27,7 @@ const ChatInterface = ({ user, onLogout }) => {
     setResetting(true);
 
     try {
-      await axios.post('http://localhost:8000/reset_chat', {
+      await axios.post('http://localhost:8080/reset_chat', {
         token: user.token,
       });
     } catch (err) {
@@ -58,7 +58,7 @@ const ChatInterface = ({ user, onLogout }) => {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://localhost:8000/chat', {
+      const res = await axios.post('http://localhost:8080/chat', {
         message: userMsg,
         token: user.token
       });
@@ -137,7 +137,7 @@ const ChatInterface = ({ user, onLogout }) => {
                     ? 'bg-accent text-white rounded-tr-none' 
                     : 'bg-secondary text-slate-200 rounded-tl-none border border-slate-700'
                 }`}>
-                  <div className="prose prose-invert max-w-none text-sm">
+                  <div className="prose prose-invert max-w-none text-sm" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                   </div>
                 </div>

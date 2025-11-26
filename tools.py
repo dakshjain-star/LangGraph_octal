@@ -64,7 +64,15 @@ def list_users(current_user_id: str):
     for user in users:
         full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
         email = user.get('email', 'N/A')
-        user_list.append(f"- **{full_name}** ({email})")
+        
+        # Truncate extremely long emails to prevent display issues
+        # Keep first 50 chars and show indication if truncated
+        if len(email) > 50:
+            email_display = f"{email[:50]}... (the email field is truncated)"
+        else:
+            email_display = email
+            
+        user_list.append(f"- **{full_name}** ({email_display})")
     
     return "\n".join(user_list)
 
