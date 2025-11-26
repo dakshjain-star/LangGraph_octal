@@ -1,25 +1,28 @@
 import os
 import random
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Optional, Dict, Any
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
 from langchain_ollama import ChatOllama
-from langchain_core.tools import tool
 from bson.objectid import ObjectId
-import pymongo
 import bcrypt
 import warnings
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+import secrets
+import uvicorn
+from fastapi import FastAPI, HTTPException, Body, Header
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Import from new modules
+from model import db
+from tools import tools
 
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_core")
 warnings.filterwarnings("ignore", message=".*Pydantic V1.*")
-
-# --- Database Connection (Same as before) ---
-client = pymongo.MongoClient("mongodb+srv://octaldaksh:octal123@cluster0.5xt6n.mongodb.net/")
-db = client["db_octal"]
 
 # --- State Definition ---
 class AgentState(TypedDict):
@@ -27,140 +30,9 @@ class AgentState(TypedDict):
     user_id: Optional[str]
     user_name: Optional[str]
 
-# --- Database Tools (Same logic, compacted for brevity) ---
-@tool
-def create_task(
-    title: str, 
-    start_date: str, 
-    end_date: str, 
-    assignee_email: str, 
-    current_user_id: str,
-    description: Optional[str] = None,
-    priority: Optional[str] = None
-):
-    """Create a new task.
-    
-    Required fields:
-    - title: Task title (required)
-    - start_date: Task start date in YYYY-MM-DD format (required)
-    - end_date: Task end date in YYYY-MM-DD format (required)
-    - assignee_email: Email address of the person assigned to the task (required)
-    - current_user_id: Current logged-in user ID (auto-populated)
-    
-    Optional fields:
-    - description: Task description (optional)
-    - priority: Task priority like Low, Medium, High (optional)
-    """
-    # Find assignee by email
-    assignee = db.users.find_one({"email": assignee_email})
-    
-    if not assignee:
-        return "Error: Assignee email not found in the organization."
-    
-    # Check if user is trying to assign task to themselves
-    if str(assignee["_id"]) == current_user_id:
-        return "Error: You cannot assign a task to yourself. Please assign it to another user."
-    
-    new_task = {
-        "title": title,
-        "description": description if description else "",
-        "priority": priority if priority else "Normal",
-        "start_date": start_date,
-        "end_date": end_date,
-        "assigned_by": ObjectId(current_user_id),
-        "assignee": assignee["_id"],
-        "timestamp": datetime.now()
-    }
-    result = db.tasks.insert_one(new_task)
-    return f"Task created successfully with ID: {str(result.inserted_id)}"
-
-@tool
-def list_users(current_user_id: str):
-    """List all users in the organization with their full names and email addresses.
-    This helps identify who can be assigned tasks."""
-    users = list(db.users.find({}, {"first_name": 1, "last_name": 1, "email": 1, "_id": 0}))
-    if not users:
-        return "No users found in the organization."
-    
-    user_list = []
-    for user in users:
-        full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-        email = user.get('email', 'N/A')
-        user_list.append(f"- **{full_name}** ({email})")
-    
-    return "\n".join(user_list)
-
-@tool
-def view_my_tasks(current_user_id: str):
-    """Fetch tasks for the current user (assignee or assigner)."""
-    uid = ObjectId(current_user_id)
-    query = {"$or": [{"assignee": uid}, {"assigned_by": uid}]}
-    tasks = list(db.tasks.find(query))
-    if not tasks: return "No tasks found."
-    
-    # Return structured JSON for the LLM to parse easily
-    task_list = []
-    for t in tasks:
-        # Fetch full user details for display
-        assignee_doc = db.users.find_one({"_id": t.get("assignee")})
-        assigner_doc = db.users.find_one({"_id": t.get("assigned_by")})
-        
-        # Build full name with email (no user ID)
-        if assignee_doc:
-            assignee_first = assignee_doc.get("first_name", "")
-            assignee_last = assignee_doc.get("last_name", "")
-            assignee_email = assignee_doc.get("email", "")
-            assignee_display = f"{assignee_first} {assignee_last}, {assignee_email}".strip()
-        else:
-            assignee_display = "Unknown"
-        
-        if assigner_doc:
-            assigner_first = assigner_doc.get("first_name", "")
-            assigner_last = assigner_doc.get("last_name", "")
-            assigner_email = assigner_doc.get("email", "")
-            assigner_display = f"{assigner_first} {assigner_last}, {assigner_email}".strip()
-        else:
-            assigner_display = "Unknown"
-
-        task_list.append({
-            "id": str(t['_id']),
-            "title": t.get('title', 'Untitled'),
-            "description": t.get('description', 'No description'),
-            "priority": t.get('priority', 'Normal'),
-            "start_date": t.get('start_date', 'N/A'),
-            "end_date": t.get('end_date', 'TBD'),
-            "assigned_by": assigner_display,
-            "assignee": assignee_display
-        })
-    return json.dumps(task_list)
-
-@tool
-def update_task_priority(task_id: str, new_priority: str, current_user_id: str):
-    """Update task priority. User must own the task."""
-    uid = ObjectId(current_user_id)
-    # Authorization check
-    task = db.tasks.find_one({"_id": ObjectId(task_id), "$or": [{"assignee": uid}, {"assigned_by": uid}]})
-    if not task: return "Error: Task not found or permission denied."
-    
-    db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"priority": new_priority}})
-    return f"Task {task_id} priority updated to {new_priority}."
-
-@tool
-def delete_task(task_id: str, current_user_id: str):
-    """Delete a task. User must own the task (be assignee or assigner)."""
-    uid = ObjectId(current_user_id)
-    # Authorization check
-    task = db.tasks.find_one({"_id": ObjectId(task_id), "$or": [{"assignee": uid}, {"assigned_by": uid}]})
-    if not task: return "Error: Task not found or permission denied."
-    
-    db.tasks.delete_one({"_id": ObjectId(task_id)})
-    return f"Task {task_id} deleted successfully."
-
 # --- INITIALIZE OLLAMA ---
 # We use the specific model you requested.
 # ensure "ollama serve" is running in your terminal.
-
-tools = [create_task, view_my_tasks, update_task_priority, delete_task, list_users]
 
 llm = ChatOllama(
     model="gpt-oss:120b-cloud",  # <--- YOUR SPECIFIC MODEL
@@ -284,43 +156,196 @@ workflow.add_edge("login_gate", END)
 workflow.add_conditional_edges("chatbot", should_continue)
 workflow.add_edge("tools", "chatbot")
 
-app = workflow.compile()
+graph_app = workflow.compile()
 
-if __name__ == "__main__":
-    print("=== Task Manager Chatbot ===")
-    print("Commands: 'login <email> <password>' | 'exit' to quit")
-    print("-" * 50)
+# ============================================================================
+# FastAPI Server
+# ============================================================================
+
+api_app = FastAPI()
+
+# Enable CORS
+api_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory session store
+# Format: {user_id: {"messages": [], "user_name": str, "email": str}}
+sessions: Dict[str, Dict[str, Any]] = {}
+
+# Token store: {token: {"user_id": str, "email": str, "user_name": str, "expires_at": datetime}}
+token_store: Dict[str, Dict[str, Any]] = {}
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class ChatRequest(BaseModel):
+    message: str
+    token: str
+
+class ResetChatRequest(BaseModel):
+    token: str
+
+class VerifyTokenRequest(BaseModel):
+    token: str
+
+@api_app.post("/login")
+def login(req: LoginRequest):
+    user = db.users.find_one({"email": req.email})
+    if user and bcrypt.checkpw(req.password.encode('utf-8'), user['password']):
+        user_id = str(user["_id"])
+        
+        # Generate unique session token
+        token = secrets.token_urlsafe(32)
+        
+        # Store token with expiry (30 days)
+        token_store[token] = {
+            "user_id": user_id,
+            "email": req.email,
+            "user_name": user["first_name"],
+            "expires_at": datetime.now() + timedelta(days=30)
+        }
+        
+        # Initialize or reuse session for this user_id
+        if user_id not in sessions:
+            sessions[user_id] = {
+                "messages": [],
+                "user_id": user_id,
+                "user_name": user["first_name"],
+                "email": req.email
+            }
+        
+        return {
+            "token": token,
+            "user_id": user_id,
+            "user_name": user["first_name"],
+            "email": req.email,
+            "status": "success"
+        }
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@api_app.post("/chat")
+def chat(req: ChatRequest):
+    # Verify token
+    if req.token not in token_store:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
-    state = {
-        "messages": [],
-        "user_id": None,
-        "user_name": None
+    token_data = token_store[req.token]
+    
+    # Check if token has expired
+    if token_data["expires_at"] < datetime.now():
+        del token_store[req.token]
+        raise HTTPException(status_code=401, detail="Token expired")
+    
+    user_id = token_data["user_id"]
+    
+    # Initialize session if it doesn't exist (e.g., after server restart)
+    if user_id not in sessions:
+        sessions[user_id] = {
+            "messages": [],
+            "user_id": user_id,
+            "user_name": token_data["user_name"],
+            "email": token_data["email"]
+        }
+    
+    session = sessions[user_id]
+    
+    # Add user message
+    session["messages"].append(HumanMessage(content=req.message))
+    
+    # Prepare state for graph
+    # Note: The graph expects 'messages' in the state
+    current_state = {
+        "messages": session["messages"],
+        "user_id": session["user_id"],
+        "user_name": session["user_name"]
     }
     
-    while True:
-        user_input = input("\nYou: ").strip()
+    try:
+        # Invoke graph
+        result = graph_app.invoke(current_state)
         
-        if user_input.lower() in ["exit", "quit", "bye"]:
-            print("Goodbye!")
-            break
+        # Update session history with result
+        # The result['messages'] contains the full history including new response
+        session["messages"] = result["messages"]
         
-        if not user_input:
-            continue
+        # Get the last message (Bot response)
+        last_msg = session["messages"][-1]
         
-        # Add user message to state
-        state["messages"].append(HumanMessage(content=user_input))
-        
-        # Invoke the graph
-        result = app.invoke(state)
-        
-        # Update state with result
-        state = result
-        
-        # Print last bot response
-        last_msg = state["messages"][-1]
-        if hasattr(last_msg, 'content'):
-            print(f"\nBot: {last_msg.content}")
-        
-        # Show tool calls if any (for debugging)
-        if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
-            print(f"[Tool calls made: {len(last_msg.tool_calls)}]")
+        return {
+            "response": last_msg.content,
+            "history": [
+                {"role": "user" if isinstance(m, HumanMessage) else "bot", "content": m.content}
+                for m in session["messages"]
+                if isinstance(m, (HumanMessage, AIMessage))
+            ]
+        }
+    except Exception as e:
+        print(f"Error processing chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_app.post("/reset_chat")
+def reset_chat(req: ResetChatRequest):
+    """Clear the in-memory chat history for a given user."""
+    # Verify token
+    if req.token not in token_store:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    token_data = token_store[req.token]
+    user_id = token_data["user_id"]
+    
+    if user_id in sessions:
+        user_name = sessions[user_id].get("user_name", "User")
+        email = sessions[user_id].get("email", "")
+        sessions[user_id] = {
+            "messages": [],
+            "user_id": user_id,
+            "user_name": user_name,
+            "email": email
+        }
+        return {"status": "success"}
+    # If session doesn't exist, treat as success so UI stays simple
+    return {"status": "success"}
+
+@api_app.post("/verify_token")
+def verify_token(req: VerifyTokenRequest):
+    """Verify if a token is valid and return user data."""
+    if req.token not in token_store:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    token_data = token_store[req.token]
+    
+    # Check if token has expired
+    if token_data["expires_at"] < datetime.now():
+        del token_store[req.token]
+        raise HTTPException(status_code=401, detail="Token expired")
+    
+    return {
+        "user_id": token_data["user_id"],
+        "user_name": token_data["user_name"],
+        "email": token_data["email"],
+        "status": "success"
+    }
+
+
+@api_app.post("/logout")
+def logout(req: VerifyTokenRequest):
+    """Logout by invalidating the token."""
+    if req.token in token_store:
+        del token_store[req.token]
+    return {"status": "success"}
+
+
+@api_app.get("/health")
+def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    # Run the FastAPI application
+    uvicorn.run(api_app, host="0.0.0.0", port=8000)
