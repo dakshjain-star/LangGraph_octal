@@ -15,7 +15,7 @@ from app.controllers.project_controller import ProjectController
 from app.middleware.auth import get_current_user, require_member_or_admin
 from app.models.user import User
 
-router = APIRouter(prefix="/projects", tags=["Projects"])
+router = APIRouter()
 
 
 @router.get(

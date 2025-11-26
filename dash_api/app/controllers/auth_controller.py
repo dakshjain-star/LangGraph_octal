@@ -126,7 +126,7 @@ class AuthController:
         reset_token = AuthService.create_password_reset_token(user.email)
         
         # In production, this would be your frontend URL
-        reset_link = f"http://localhost:5173/reset-password?token={reset_token}"
+        reset_link = f"http://localhost:3000/reset-password?token={reset_token}"
         
         # Send email
         await send_password_reset_email(

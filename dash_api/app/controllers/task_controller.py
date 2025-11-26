@@ -1,6 +1,6 @@
 """Task controller with business logic."""
 from fastapi import HTTPException, status
-from typing import Dict, List
+from typing import Dict, List, Optional
 import re
 from datetime import datetime, timedelta
 
@@ -18,42 +18,55 @@ class TaskController:
     """Task controller for handling task operations."""
     
     @staticmethod
-    async def get_all_tasks(filter_data: TaskFilter) -> Dict:
+    async def get_all_tasks(
+        assignee_id: Optional[str] = None,
+        creator_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        status: Optional[List[TaskStatus]] = None,
+        priority: Optional[List[TaskPriority]] = None,
+        search: Optional[str] = None,
+        date_filter: str = "all",
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        skip: int = 0,
+        limit: int = 50,
+        current_user: User = None
+    ) -> List[TaskResponse]:
         """Get all tasks with complex filtering."""
         query = {}
         
         # Apply filters
-        if filter_data.status:
-            query["status"] = {"$in": filter_data.status}
+        if status:
+            query["status"] = {"$in": status}
         
-        if filter_data.priority:
-            query["priority"] = {"$in": filter_data.priority}
+        if priority:
+            query["priority"] = {"$in": priority}
         
-        if filter_data.assignee_id:
-            query["assignee_id"] = filter_data.assignee_id
+        if assignee_id:
+            query["assignee_id"] = assignee_id
         
-        if filter_data.creator_id:
-            query["creator_id"] = filter_data.creator_id
+        if creator_id:
+            query["creator_id"] = creator_id
         
-        if filter_data.project_id:
-            query["project_id"] = filter_data.project_id
+        if project_id:
+            query["project_id"] = project_id
         
-        if filter_data.search:
+        if search:
             # Search in title and description
-            search_regex = re.compile(re.escape(filter_data.search), re.IGNORECASE)
+            search_regex = re.compile(re.escape(search), re.IGNORECASE)
             query["$or"] = [
                 {"title": search_regex},
                 {"description": search_regex}
             ]
         
         # Handle date filters
-        if filter_data.date_filter and filter_data.date_filter != "all":
+        if date_filter and date_filter != "all":
             today = datetime.utcnow().date()
             
-            if filter_data.date_filter == "today":
+            if date_filter == "today":
                 query["due_date"] = today
             
-            elif filter_data.date_filter == "this_week":
+            elif date_filter == "this_week":
                 # Get start of week (Monday) and end of week (Sunday)
                 start_of_week = today - timedelta(days=today.weekday())
                 end_of_week = start_of_week + timedelta(days=6)
@@ -62,7 +75,7 @@ class TaskController:
                     "$lte": end_of_week
                 }
             
-            elif filter_data.date_filter == "overdue":
+            elif date_filter == "overdue":
                 query["due_date"] = {"$lt": today}
                 query["status"] = {"$ne": TaskStatus.DONE}
         
@@ -70,13 +83,13 @@ class TaskController:
         total = await Task.find(query).count()
         
         # Determine sort order
-        sort_direction = 1 if filter_data.sort_order == "asc" else -1
+        sort_direction = 1 if sort_order == "asc" else -1
         
         # Get tasks with pagination and sorting
         tasks = await Task.find(query)\
-            .sort((filter_data.sort_by, sort_direction))\
-            .skip(filter_data.skip)\
-            .limit(filter_data.limit)\
+            .sort((sort_by, sort_direction))\
+            .skip(skip)\
+            .limit(limit)\
             .to_list()
         
         # Check for overdue tasks
@@ -107,15 +120,10 @@ class TaskController:
                 )
             )
         
-        return {
-            "tasks": task_responses,
-            "total": total,
-            "skip": filter_data.skip,
-            "limit": filter_data.limit
-        }
+        return task_responses
     
     @staticmethod
-    async def get_task_by_id(task_id: str) -> Dict:
+    async def get_task_by_id(task_id: str, current_user: User) -> Dict:
         """Get a single task by ID with comments."""
         task = await Task.get(task_id)
         if not task:

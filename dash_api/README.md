@@ -233,7 +233,7 @@ Key variables:
 - `MONGODB_URL` - MongoDB connection string
 - `JWT_SECRET_KEY` - Secret key for JWT signing
 - `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD` - Email configuration
-- `CORS_ORIGINS` - Allowed frontend origins
+- `CORS_ORIGINS` - Allowed frontend origins (default: http://localhost:3000)
 
 ## Authentication & Authorization
 

@@ -12,7 +12,7 @@ from app.controllers.comment_controller import CommentController
 from app.middleware.auth import get_current_user
 from app.models.user import User
 
-router = APIRouter(prefix="/comments", tags=["Comments"])
+router = APIRouter()
 
 
 @router.get(

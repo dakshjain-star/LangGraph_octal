@@ -6,10 +6,10 @@ from typing import Optional
 from app.schemas.auth import ChangePasswordRequest, MessageResponse
 from app.middleware.auth import get_current_user
 from app.models.user import User
-from app.services.auth import hash_password, verify_password
+from app.services.auth import get_password_hash, verify_password
 from fastapi import HTTPException
 
-router = APIRouter(prefix="/settings", tags=["Settings"])
+router = APIRouter()
 
 
 class UserSettings(BaseModel):
@@ -145,7 +145,7 @@ async def change_password(
         )
     
     # Hash new password
-    new_password_hash = hash_password(password_data.new_password)
+    new_password_hash = get_password_hash(password_data.new_password)
     
     # Update password
     await current_user.update({"$set": {"password_hash": new_password_hash}})

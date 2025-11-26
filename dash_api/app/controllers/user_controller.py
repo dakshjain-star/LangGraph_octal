@@ -318,7 +318,7 @@ class UserController:
         await send_password_reset_email(
             to_email=user.email,
             to_name=user.name,
-            reset_link=f"http://localhost:5173/login?email={user.email}"
+            reset_link=f"http://localhost:3000/login?email={user.email}"
         )
         
         return UserResponse(

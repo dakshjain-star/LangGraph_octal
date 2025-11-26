@@ -98,8 +98,8 @@ MONGODB_DB_NAME=dash_saas
 # JWT Secret (CHANGE THIS!)
 JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
 
-# CORS (add your frontend URL)
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+# CORS (frontend URL - running on port 3000)
+CORS_ORIGINS=http://localhost:3000
 
 # Email (optional, for invitations and password reset)
 SMTP_HOST=smtp.gmail.com

@@ -17,7 +17,7 @@ from app.controllers.task_controller import TaskController
 from app.middleware.auth import get_current_user, require_member_or_admin
 from app.models.user import User
 
-router = APIRouter(prefix="/tasks", tags=["Tasks"])
+router = APIRouter()
 
 
 @router.get(

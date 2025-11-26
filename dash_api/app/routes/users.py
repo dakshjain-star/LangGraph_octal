@@ -20,7 +20,7 @@ from app.middleware.auth import (
 )
 from app.models.user import User
 
-router = APIRouter(prefix="/users", tags=["Users"])
+router = APIRouter()
 
 
 @router.get(

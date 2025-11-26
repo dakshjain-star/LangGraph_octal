@@ -16,7 +16,7 @@ from app.controllers.auth_controller import AuthController
 from app.middleware.auth import get_current_user
 from app.models.user import User
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter()
 
 
 @router.post(
