@@ -94,6 +94,9 @@ ehthumbs.db
 # JetBrains
 *.iml
 
+#extra
+dash_saas
+
 # History / metadata
 .history/
 
