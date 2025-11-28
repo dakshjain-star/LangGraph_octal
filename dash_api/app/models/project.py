@@ -2,7 +2,7 @@
 from beanie import Document, Link
 from pydantic import Field
 from typing import Optional
-from datetime import datetime, date
+from datetime import datetime
 from enum import Enum
 
 
@@ -19,7 +19,7 @@ class Project(Document):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1)
     status: ProjectStatus = Field(default=ProjectStatus.ACTIVE)
-    due_date: Optional[date] = None
+    due_date: Optional[datetime] = None
     
     # Owner info (denormalized for performance)
     owner_id: str = Field(...)

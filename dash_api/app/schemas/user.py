@@ -99,14 +99,12 @@ class UserResponse(UserBase):
 class UserInviteRequest(BaseModel):
     """User invitation request schema."""
     email: EmailStr
-    name: str = Field(..., min_length=1, max_length=100)
     role: UserRole = Field(default=UserRole.MEMBER)
     
     class Config:
         json_schema_extra = {
             "example": {
-                "email": "newuser@example.com",
-                "name": "Jane Smith",
+                "email": "existinguser@example.com",
                 "role": "Member"
             }
         }

@@ -6,6 +6,7 @@ from app.routes.tasks import router as tasks_router
 from app.routes.comments import router as comments_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.settings import router as settings_router
+from app.routes.invitations import router as invitations_router
 
 __all__ = [
     "auth_router",
@@ -14,5 +15,6 @@ __all__ = [
     "tasks_router",
     "comments_router",
     "dashboard_router",
-    "settings_router"
+    "settings_router",
+    "invitations_router"
 ]

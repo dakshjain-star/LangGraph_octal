@@ -11,13 +11,14 @@ from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectStatusUpdate,
     ProjectResponse, ProjectFilter
 )
+from app.schemas.task import TaskResponse
 
 
 class ProjectController:
     """Project controller for handling project operations."""
     
     @staticmethod
-    async def get_all_projects(filter_data: ProjectFilter) -> Dict:
+    async def get_all_projects(filter_data: ProjectFilter) -> List[ProjectResponse]:
         """Get all projects with complex filtering."""
         query = {}
         
@@ -40,9 +41,6 @@ class ProjectController:
                 {"description": search_regex}
             ]
         
-        # Get total count
-        total = await Project.find(query).count()
-        
         # Determine sort order
         sort_direction = 1 if filter_data.sort_order == "asc" else -1
         
@@ -53,18 +51,16 @@ class ProjectController:
             .limit(filter_data.limit)\
             .to_list()
         
-        # Get task counts for each project
+        # Build project responses
         project_responses = []
         for project in projects:
-            task_count = await Task.find(Task.project_id == str(project.id)).count()
-            
             project_responses.append(
                 ProjectResponse(
                     id=str(project.id),
                     name=project.name,
                     description=project.description,
                     status=project.status,
-                    due_date=project.due_date,
+                    due_date=project.due_date.date() if project.due_date else None,
                     owner_id=project.owner_id,
                     owner_name=project.owner_name,
                     client_name=project.client_name,
@@ -73,16 +69,11 @@ class ProjectController:
                 )
             )
         
-        return {
-            "projects": project_responses,
-            "total": total,
-            "skip": filter_data.skip,
-            "limit": filter_data.limit
-        }
+        return project_responses
     
     @staticmethod
-    async def get_project_by_id(project_id: str) -> Dict:
-        """Get a single project by ID with task count."""
+    async def get_project_by_id(project_id: str) -> ProjectResponse:
+        """Get a single project by ID."""
         project = await Project.get(project_id)
         if not project:
             raise HTTPException(
@@ -90,26 +81,18 @@ class ProjectController:
                 detail="Project not found"
             )
         
-        # Get task count
-        task_count = await Task.find(Task.project_id == str(project.id)).count()
-        
-        project_response = ProjectResponse(
+        return ProjectResponse(
             id=str(project.id),
             name=project.name,
             description=project.description,
             status=project.status,
-            due_date=project.due_date,
+            due_date=project.due_date.date() if project.due_date else None,
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
             created_at=project.created_at,
             updated_at=project.updated_at
         )
-        
-        return {
-            **project_response.model_dump(),
-            "task_count": task_count
-        }
     
     @staticmethod
     async def create_project(data: ProjectCreate, current_user: User) -> ProjectResponse:
@@ -125,12 +108,17 @@ class ProjectController:
                 detail="Owner user not found"
             )
         
+        # Convert date to datetime for MongoDB storage
+        due_date_dt = None
+        if data.due_date:
+            due_date_dt = datetime.combine(data.due_date, datetime.min.time())
+        
         # Create project
         project = Project(
             name=data.name,
             description=data.description,
             status=data.status,
-            due_date=data.due_date,
+            due_date=due_date_dt,
             owner_id=owner_id,
             owner_name=owner.name,
             client_name=data.client_name
@@ -143,7 +131,7 @@ class ProjectController:
             name=project.name,
             description=project.description,
             status=project.status,
-            due_date=project.due_date,
+            due_date=project.due_date.date() if project.due_date else None,
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
@@ -184,6 +172,10 @@ class ProjectController:
             project.owner_name = owner.name
             update_data.pop("owner_id")
         
+        # Convert due_date from date to datetime if present
+        if "due_date" in update_data and update_data["due_date"]:
+            update_data["due_date"] = datetime.combine(update_data["due_date"], datetime.min.time())
+        
         for field, value in update_data.items():
             setattr(project, field, value)
         
@@ -195,7 +187,7 @@ class ProjectController:
             name=project.name,
             description=project.description,
             status=project.status,
-            due_date=project.due_date,
+            due_date=project.due_date.date() if project.due_date else None,
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
@@ -231,7 +223,7 @@ class ProjectController:
             name=project.name,
             description=project.description,
             status=project.status,
-            due_date=project.due_date,
+            due_date=project.due_date.date() if project.due_date else None,
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
@@ -263,7 +255,7 @@ class ProjectController:
         return {"message": "Project deleted successfully"}
     
     @staticmethod
-    async def get_project_tasks(project_id: str, skip: int = 0, limit: int = 50) -> Dict:
+    async def get_project_tasks(project_id: str, skip: int = 0, limit: int = 50) -> List[TaskResponse]:
         """Get all tasks for a project."""
         # Check if project exists
         project = await Project.get(project_id)
@@ -272,9 +264,6 @@ class ProjectController:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found"
             )
-        
-        # Get total task count
-        total = await Task.find(Task.project_id == project_id).count()
         
         # Get tasks with pagination
         tasks = await Task.find(Task.project_id == project_id)\
@@ -291,30 +280,25 @@ class ProjectController:
             if task.due_date and task.due_date < today and task.status.value != "Done":
                 is_overdue = True
             
-            task_responses.append({
-                "id": str(task.id),
-                "title": task.title,
-                "description": task.description,
-                "status": task.status,
-                "priority": task.priority,
-                "due_date": task.due_date,
-                "assignee_id": task.assignee_id,
-                "assignee_name": task.assignee_name,
-                "assignee_avatar": task.assignee_avatar,
-                "creator_id": task.creator_id,
-                "project_id": task.project_id,
-                "project_name": task.project_name,
-                "created_at": task.created_at,
-                "updated_at": task.updated_at,
-                "is_overdue": is_overdue
-            })
+            task_responses.append(TaskResponse(
+                id=str(task.id),
+                title=task.title,
+                description=task.description,
+                status=task.status,
+                priority=task.priority,
+                due_date=task.due_date,
+                assignee_id=task.assignee_id,
+                assignee_name=task.assignee_name,
+                assignee_avatar=task.assignee_avatar,
+                creator_id=task.creator_id,
+                project_id=task.project_id,
+                project_name=task.project_name,
+                created_at=task.created_at,
+                updated_at=task.updated_at,
+                is_overdue=is_overdue
+            ))
         
-        return {
-            "tasks": task_responses,
-            "total": total,
-            "skip": skip,
-            "limit": limit
-        }
+        return task_responses
     
     @staticmethod
     async def get_project_owners() -> List[Dict[str, str]]:

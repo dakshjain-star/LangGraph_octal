@@ -11,6 +11,7 @@ from app.schemas.user import (
     UserStatus,
     UserRole
 )
+from app.schemas.invitation import InvitationResponse
 from app.schemas.auth import MessageResponse
 from app.controllers.user_controller import UserController
 from app.middleware.auth import (
@@ -184,21 +185,21 @@ async def delete_user(
 
 @router.post(
     "/invite",
-    response_model=UserResponse,
+    response_model=InvitationResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Invite user",
-    description="Invite a new user to the platform"
+    description="Invite an existing user to join your company"
 )
 async def invite_user(
     invite_data: UserInviteRequest,
-    current_user: User = Depends(require_member_or_admin)
+    current_user: User = Depends(require_admin)
 ):
     """
-    Invite a new user:
-    - **email**: Email address of the user to invite
-    - **name**: Full name of the user
-    - **role**: Role to assign (default: Member)
+    Invite an existing user to join your company:
+    - **email**: Email address of the registered user to invite
+    - **role**: Role to assign upon acceptance (default: Member)
     
-    Sends an invitation email. Requires Member or Admin role.
+    The user must already be registered. Creates an invitation that the user can accept or decline.
+    Requires Admin role.
     """
     return await UserController.invite_user(invite_data, current_user)

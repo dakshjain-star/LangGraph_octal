@@ -29,6 +29,10 @@ from .dashboard import (
     DashboardStats, DashboardData,
     SettingsUpdate, SettingsResponse
 )
+from .invitation import (
+    InvitationResponse, InvitationActionRequest,
+    InvitationStatus
+)
 
 __all__ = [
     # Auth
@@ -59,5 +63,9 @@ __all__ = [
     
     # Dashboard
     "DashboardStats", "DashboardData",
-    "SettingsUpdate", "SettingsResponse"
+    "SettingsUpdate", "SettingsResponse",
+    
+    # Invitation
+    "InvitationResponse", "InvitationActionRequest",
+    "InvitationStatus"
 ]

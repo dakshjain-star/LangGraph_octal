@@ -35,11 +35,12 @@ class MongoDB:
             from app.models.project import Project
             from app.models.task import Task
             from app.models.comment import Comment
+            from app.models.invitation import Invitation
             
             # Initialize Beanie with document models
             await init_beanie(
                 database=database,
-                document_models=[User, Project, Task, Comment]
+                document_models=[User, Project, Task, Comment, Invitation]
             )
             
             logger.info("Successfully connected to MongoDB and initialized Beanie")

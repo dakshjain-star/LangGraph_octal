@@ -28,6 +28,10 @@ class AuthController:
                 detail="Email already registered"
             )
         
+        # Check if this is the first user for this company (they become Admin)
+        existing_company_user = await User.find_one(User.company_name == data.company_name)
+        user_role = UserRole.ADMIN if not existing_company_user else UserRole.MEMBER
+        
         # Create new user
         user = User(
             name=data.name,
@@ -35,7 +39,7 @@ class AuthController:
             password_hash=get_password_hash(data.password),
             company_name=data.company_name,
             status=UserStatus.ACTIVE,
-            role=UserRole.MEMBER
+            role=user_role
         )
         
         await user.insert()

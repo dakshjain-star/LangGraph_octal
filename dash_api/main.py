@@ -14,7 +14,8 @@ from app.routes import (
     tasks_router,
     comments_router,
     dashboard_router,
-    settings_router
+    settings_router,
+    invitations_router
 )
 
 # Configure logging
@@ -98,6 +99,7 @@ app.include_router(tasks_router, prefix=f"{settings.api_prefix}/tasks", tags=["T
 app.include_router(comments_router, prefix=f"{settings.api_prefix}", tags=["Comments"])
 app.include_router(dashboard_router, prefix=f"{settings.api_prefix}/dashboard", tags=["Dashboard"])
 app.include_router(settings_router, prefix=f"{settings.api_prefix}/settings", tags=["Settings"])
+app.include_router(invitations_router, prefix=f"{settings.api_prefix}/invitations", tags=["Invitations"])
 
 
 # Root endpoint

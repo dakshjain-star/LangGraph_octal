@@ -5,10 +5,12 @@ import re
 from datetime import datetime
 
 from app.models.user import User, UserStatus, UserRole
+from app.models.invitation import Invitation, InvitationStatus
 from app.schemas.user import (
     UserUpdate, UserRoleUpdate, UserStatusUpdate, 
     UserInviteRequest, UserResponse
 )
+from app.schemas.invitation import InvitationResponse
 from app.services.auth import get_password_hash
 from app.services.email import send_password_reset_email
 import secrets
@@ -23,8 +25,9 @@ class UserController:
         role: Optional[UserRole] = None,
         search: Optional[str] = None,
         skip: int = 0,
-        limit: int = 50
-    ) -> Dict:
+        limit: int = 50,
+        current_user: User = None
+    ) -> List[UserResponse]:
         """Get all users with optional filters."""
         query = {}
         
@@ -70,12 +73,7 @@ class UserController:
             for user in users
         ]
         
-        return {
-            "users": user_responses,
-            "total": total,
-            "skip": skip,
-            "limit": limit
-        }
+        return user_responses
     
     @staticmethod
     async def get_user_by_id(user_id: str) -> UserResponse:
@@ -252,12 +250,16 @@ class UserController:
     
     @staticmethod
     async def delete_user(user_id: str, current_user: User) -> Dict:
-        """Delete a user (admin only)."""
+        """Remove a user from the company (admin only).
+        
+        This does not delete the user from the database.
+        Instead, it changes their company_name to 'Individual' and role to 'Member'.
+        """
         # Check if current user is admin
         if current_user.role != UserRole.ADMIN:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admins can delete users"
+                detail="Only admins can remove users from company"
             )
         
         # Check if user exists
@@ -268,21 +270,31 @@ class UserController:
                 detail="User not found"
             )
         
-        # Prevent self-deletion
+        # Prevent self-removal
         if str(user.id) == str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete your own account"
+                detail="Cannot remove yourself from the company"
             )
         
-        # Delete user
-        await user.delete()
+        # Check if user belongs to the same company
+        if user.company_name != current_user.company_name:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot remove users from other companies"
+            )
         
-        return {"message": "User deleted successfully"}
+        # Remove user from company by setting company_name to "Individual"
+        user.company_name = "Individual"
+        user.role = UserRole.MEMBER  # Reset role to Member
+        user.updated_at = datetime.utcnow()
+        await user.save()
+        
+        return {"message": "User removed from company successfully"}
     
     @staticmethod
-    async def invite_user(data: UserInviteRequest, current_user: User) -> UserResponse:
-        """Invite a new user (admin only)."""
+    async def invite_user(data: UserInviteRequest, current_user: User) -> InvitationResponse:
+        """Invite an existing user to join company (admin only)."""
         # Check if current user is admin
         if current_user.role != UserRole.ADMIN:
             raise HTTPException(
@@ -290,56 +302,66 @@ class UserController:
                 detail="Only admins can invite users"
             )
         
-        # Check if user already exists
+        # Check if user exists (must be registered first)
         existing_user = await User.find_one(User.email == data.email)
-        if existing_user:
+        if not existing_user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User with this email already exists"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User with this email is not registered. They must register first."
             )
         
-        # Generate temporary password
-        temp_password = secrets.token_urlsafe(16)
+        # Check if user is already in this company
+        if existing_user.company_name == current_user.company_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User is already a member of your company"
+            )
         
-        # Create invited user
-        user = User(
-            name=data.name,
-            email=data.email,
-            password_hash=get_password_hash(temp_password),
+        # Check if invitation already exists and is pending
+        existing_invitation = await Invitation.find_one(
+            Invitation.invitee_email == data.email,
+            Invitation.company_name == current_user.company_name,
+            Invitation.status == InvitationStatus.PENDING
+        )
+        if existing_invitation:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An invitation has already been sent to this user"
+            )
+        
+        # Create invitation
+        invitation = Invitation(
+            invitee_email=data.email,
+            invitee_user_id=str(existing_user.id),
             company_name=current_user.company_name,
-            status=UserStatus.INVITED,
-            role=data.role
+            inviter_id=str(current_user.id),
+            inviter_name=current_user.name,
+            role=data.role.value if hasattr(data.role, 'value') else str(data.role),
+            status=InvitationStatus.PENDING
         )
         
-        await user.insert()
+        await invitation.insert()
         
-        # Send invitation email with temporary password
-        # In production, this would send a proper invitation link
-        await send_password_reset_email(
-            to_email=user.email,
-            to_name=user.name,
-            reset_link=f"http://localhost:3000/login?email={user.email}"
-        )
+        # Optionally send email notification
+        # await send_invitation_email(...)
         
-        return UserResponse(
-            id=str(user.id),
-            name=user.name,
-            email=user.email,
-            company_name=user.company_name,
-            avatar_url=user.avatar_url,
-            status=user.status,
-            role=user.role,
-            email_notifications=user.email_notifications,
-            push_notifications=user.push_notifications,
-            product_updates=user.product_updates,
-            two_factor_enabled=user.two_factor_enabled,
-            public_profile=user.public_profile,
-            created_at=user.created_at,
-            updated_at=user.updated_at
+        return InvitationResponse(
+            id=str(invitation.id),
+            invitee_email=invitation.invitee_email,
+            invitee_user_id=invitation.invitee_user_id,
+            company_name=invitation.company_name,
+            company_id=invitation.company_id,
+            inviter_id=invitation.inviter_id,
+            inviter_name=invitation.inviter_name,
+            role=invitation.role,
+            status=invitation.status,
+            created_at=invitation.created_at,
+            updated_at=invitation.updated_at,
+            expires_at=invitation.expires_at
         )
     
     @staticmethod
-    async def search_users(query: str) -> List[UserResponse]:
+    async def search_users(query: str, current_user: User = None) -> List[UserResponse]:
         """Search users by name or email."""
         if not query or len(query.strip()) == 0:
             return []

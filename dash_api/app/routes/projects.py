@@ -7,7 +7,8 @@ from app.schemas.project import (
     ProjectCreate,
     ProjectUpdate,
     ProjectStatusUpdate,
-    ProjectStatus
+    ProjectStatus,
+    ProjectFilter
 )
 from app.schemas.task import TaskResponse
 from app.schemas.auth import MessageResponse
@@ -49,7 +50,7 @@ async def get_projects(
     
     Requires authentication.
     """
-    return await ProjectController.get_all_projects(
+    filter_data = ProjectFilter(
         status=status_filter,
         owner_id=owner_id,
         client_name=client_name,
@@ -57,9 +58,9 @@ async def get_projects(
         sort_by=sort_by,
         sort_order=sort_order,
         skip=skip,
-        limit=limit,
-        current_user=current_user
+        limit=limit
     )
+    return await ProjectController.get_all_projects(filter_data)
 
 
 @router.get(
@@ -77,7 +78,7 @@ async def get_project_owners(
     
     Returns list of users who own at least one project.
     """
-    return await ProjectController.get_project_owners(current_user)
+    return await ProjectController.get_project_owners()
 
 
 @router.get(
@@ -98,7 +99,7 @@ async def get_project(
     
     Requires authentication.
     """
-    return await ProjectController.get_project_by_id(project_id, current_user)
+    return await ProjectController.get_project_by_id(project_id)
 
 
 @router.get(
@@ -110,6 +111,8 @@ async def get_project(
 )
 async def get_project_tasks(
     project_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -119,7 +122,7 @@ async def get_project_tasks(
     
     Returns all tasks belonging to the project.
     """
-    return await ProjectController.get_project_tasks(project_id, current_user)
+    return await ProjectController.get_project_tasks(project_id, skip, limit)
 
 
 @router.post(
