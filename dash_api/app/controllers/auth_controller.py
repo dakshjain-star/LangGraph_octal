@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from typing import Dict
 
 from app.models.user import User, UserStatus, UserRole
+from app.models.company import Company
 from app.schemas.auth import (
     RegisterRequest, LoginRequest, RefreshTokenRequest,
     ForgotPasswordRequest, ResetPasswordRequest
@@ -29,20 +30,46 @@ class AuthController:
             )
         
         # Check if this is the first user for this company (they become Admin)
-        existing_company_user = await User.find_one(User.company_name == data.company_name)
-        user_role = UserRole.ADMIN if not existing_company_user else UserRole.MEMBER
+        # Look up by company name first
+        existing_company = await Company.find_one(Company.name == data.company_name)
+        
+        company_id = None
+        user_role = UserRole.MEMBER
+        
+        if not existing_company:
+            # This is a new company - user becomes Admin
+            user_role = UserRole.ADMIN
+            # We'll create the company after creating the user (need user id)
+        else:
+            # Company exists, user joins as Member
+            company_id = str(existing_company.id)
         
         # Create new user
         user = User(
             name=data.name,
             email=data.email,
             password_hash=get_password_hash(data.password),
+            company_id=company_id,
             company_name=data.company_name,
             status=UserStatus.ACTIVE,
             role=user_role
         )
         
         await user.insert()
+        
+        # If this is a new company, create it now with the user as owner
+        if not existing_company:
+            company = Company(
+                name=data.company_name,
+                owner_id=str(user.id),
+                owner_name=user.name,
+                owner_email=user.email
+            )
+            await company.insert()
+            
+            # Update user with company_id
+            user.company_id = str(company.id)
+            await user.save()
         
         # Create tokens
         tokens = create_token_pair(str(user.id), user.email)

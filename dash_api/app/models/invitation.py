@@ -22,8 +22,8 @@ class Invitation(Document):
     invitee_user_id: Optional[str] = None  # Set when user exists
     
     # The company/admin sending the invitation
+    company_id: str = Field(...)  # Reference to Company
     company_name: str = Field(..., min_length=1, max_length=200)
-    company_id: Optional[str] = None  # For future use
     inviter_id: str = Field(...)  # The admin who sent the invite
     inviter_name: str = Field(...)
     
@@ -44,7 +44,7 @@ class Invitation(Document):
             "invitee_email",
             "inviter_id",
             "status",
-            "company_name",
+            "company_id",
         ]
     
     class Config:

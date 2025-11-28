@@ -25,6 +25,10 @@ class Project(Document):
     owner_id: str = Field(...)
     owner_name: str = Field(...)
     
+    # Company info (for multi-tenancy)
+    company_id: Optional[str] = Field(default=None)  # Reference to Company
+    company_name: Optional[str] = Field(default=None, max_length=200)
+    
     # Client info
     client_name: str = Field(..., min_length=1, max_length=200)
     
@@ -36,6 +40,7 @@ class Project(Document):
         name = "projects"
         indexes = [
             "owner_id",
+            "company_id",
             "status",
             "due_date",
             "client_name",

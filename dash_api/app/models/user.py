@@ -25,7 +25,11 @@ class User(Document):
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr = Field(..., unique=True)
     password_hash: str = Field(...)
+    
+    # Company association
+    company_id: Optional[str] = Field(default=None)  # Reference to Company
     company_name: str = Field(..., min_length=1, max_length=200)
+    
     avatar_url: Optional[str] = None
     status: UserStatus = Field(default=UserStatus.ACTIVE)
     role: UserRole = Field(default=UserRole.MEMBER)
@@ -45,6 +49,7 @@ class User(Document):
         name = "users"
         indexes = [
             "email",
+            "company_id",
             "status",
             "role",
         ]
@@ -67,6 +72,7 @@ class User(Document):
             "id": str(self.id),
             "name": self.name,
             "email": self.email,
+            "company_id": self.company_id,
             "company_name": self.company_name,
             "avatar_url": self.avatar_url,
             "status": self.status,

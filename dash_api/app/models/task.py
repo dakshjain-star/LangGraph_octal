@@ -28,7 +28,7 @@ class Task(Document):
     description: str = Field(default="")
     status: TaskStatus = Field(default=TaskStatus.TODO)
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM)
-    due_date: Optional[date] = None
+    due_date: Optional[datetime] = None  # Use datetime for Beanie compatibility
     
     # Assignee info (denormalized for performance)
     assignee_id: str = Field(...)
@@ -37,6 +37,10 @@ class Task(Document):
     
     # Creator info
     creator_id: str = Field(...)
+    
+    # Company info (for multi-tenancy)
+    company_id: Optional[str] = Field(default=None)  # Reference to Company
+    company_name: Optional[str] = Field(default=None, max_length=200)
     
     # Project info (optional, denormalized)
     project_id: Optional[str] = None
@@ -51,6 +55,7 @@ class Task(Document):
         indexes = [
             "assignee_id",
             "creator_id",
+            "company_id",
             "project_id",
             "status",
             "priority",
@@ -82,5 +87,5 @@ class Task(Document):
     def is_overdue(self) -> bool:
         """Check if task is overdue."""
         if self.due_date and self.status != TaskStatus.DONE:
-            return date.today() > self.due_date
+            return datetime.utcnow().date() > self.due_date.date()
         return False

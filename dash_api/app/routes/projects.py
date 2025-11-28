@@ -60,7 +60,7 @@ async def get_projects(
         skip=skip,
         limit=limit
     )
-    return await ProjectController.get_all_projects(filter_data)
+    return await ProjectController.get_all_projects(filter_data, current_user)
 
 
 @router.get(
@@ -78,7 +78,7 @@ async def get_project_owners(
     
     Returns list of users who own at least one project.
     """
-    return await ProjectController.get_project_owners()
+    return await ProjectController.get_project_owners(current_user)
 
 
 @router.get(
@@ -99,7 +99,7 @@ async def get_project(
     
     Requires authentication.
     """
-    return await ProjectController.get_project_by_id(project_id)
+    return await ProjectController.get_project_by_id(project_id, current_user)
 
 
 @router.get(

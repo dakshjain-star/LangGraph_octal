@@ -31,6 +31,10 @@ class UserController:
         """Get all users with optional filters."""
         query = {}
         
+        # Filter by company - users can only see users in their own company
+        if current_user and current_user.company_id:
+            query["company_id"] = current_user.company_id
+        
         # Apply filters
         if status:
             query["status"] = status
@@ -76,13 +80,20 @@ class UserController:
         return user_responses
     
     @staticmethod
-    async def get_user_by_id(user_id: str) -> UserResponse:
+    async def get_user_by_id(user_id: str, current_user: User = None) -> UserResponse:
         """Get a single user by ID."""
         user = await User.get(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
+            )
+        
+        # Check company access - users can only view users in their own company
+        if current_user and user.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this user"
             )
         
         return UserResponse(
@@ -278,13 +289,14 @@ class UserController:
             )
         
         # Check if user belongs to the same company
-        if user.company_name != current_user.company_name:
+        if user.company_id != current_user.company_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot remove users from other companies"
             )
         
-        # Remove user from company by setting company_name to "Individual"
+        # Remove user from company by setting company to "Individual"
+        user.company_id = None
         user.company_name = "Individual"
         user.role = UserRole.MEMBER  # Reset role to Member
         user.updated_at = datetime.utcnow()
@@ -311,7 +323,7 @@ class UserController:
             )
         
         # Check if user is already in this company
-        if existing_user.company_name == current_user.company_name:
+        if existing_user.company_id == current_user.company_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User is already a member of your company"
@@ -320,7 +332,7 @@ class UserController:
         # Check if invitation already exists and is pending
         existing_invitation = await Invitation.find_one(
             Invitation.invitee_email == data.email,
-            Invitation.company_name == current_user.company_name,
+            Invitation.company_id == current_user.company_id,
             Invitation.status == InvitationStatus.PENDING
         )
         if existing_invitation:
@@ -333,6 +345,7 @@ class UserController:
         invitation = Invitation(
             invitee_email=data.email,
             invitee_user_id=str(existing_user.id),
+            company_id=current_user.company_id,
             company_name=current_user.company_name,
             inviter_id=str(current_user.id),
             inviter_name=current_user.name,
@@ -369,15 +382,20 @@ class UserController:
         # Case-insensitive regex search
         search_regex = re.compile(re.escape(query), re.IGNORECASE)
         
-        users = await User.find(
-            {
-                "$or": [
-                    {"name": search_regex},
-                    {"email": search_regex}
-                ],
-                "status": UserStatus.ACTIVE
-            }
-        ).limit(20).to_list()
+        # Build query with company filter
+        search_query = {
+            "$or": [
+                {"name": search_regex},
+                {"email": search_regex}
+            ],
+            "status": UserStatus.ACTIVE
+        }
+        
+        # Filter by company if current_user is provided
+        if current_user and current_user.company_id:
+            search_query["company_id"] = current_user.company_id
+        
+        users = await User.find(search_query).limit(20).to_list()
         
         return [
             UserResponse(

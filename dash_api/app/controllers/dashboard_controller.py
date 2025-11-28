@@ -19,11 +19,13 @@ class DashboardController:
         """Get aggregated dashboard statistics for current user."""
         today = datetime.utcnow().date()
         user_id = str(current_user.id)
+        company_id = current_user.company_id
         
         # Use aggregation for efficiency
         pipeline = [
             {
                 "$match": {
+                    "company_id": company_id,
                     "$or": [
                         {"assignee_id": user_id},
                         {"creator_id": user_id}
@@ -74,6 +76,7 @@ class DashboardController:
         # Count overdue tasks manually (date comparison)
         overdue_tasks = await Task.find(
             Task.assignee_id == user_id,
+            Task.company_id == company_id,
             Task.status != TaskStatus.DONE
         ).to_list()
         
@@ -82,6 +85,7 @@ class DashboardController:
         # Count active projects where user is involved
         active_projects_count = await Project.find(
             Project.owner_id == user_id,
+            Project.company_id == company_id,
             Project.status == ProjectStatus.ACTIVE
         ).count()
         
@@ -98,10 +102,12 @@ class DashboardController:
     async def get_recent_projects(current_user: User, limit: int = 5) -> List[ProjectResponse]:
         """Get recent projects I own or am involved in."""
         user_id = str(current_user.id)
+        company_id = current_user.company_id
         
-        # Get projects owned by current user
+        # Get projects owned by current user in their company
         projects = await Project.find(
             Project.owner_id == user_id,
+            Project.company_id == company_id,
             Project.status == ProjectStatus.ACTIVE
         ).sort([("updated_at", -1)]).limit(limit).to_list()
         
@@ -125,11 +131,13 @@ class DashboardController:
     async def get_my_pending_tasks(current_user: User, limit: int = 5) -> List[TaskResponse]:
         """Get my pending tasks (not done), ordered by due_date."""
         user_id = str(current_user.id)
+        company_id = current_user.company_id
         today = datetime.utcnow().date()
         
-        # Get tasks assigned to me that are not done
+        # Get tasks assigned to me that are not done in my company
         tasks = await Task.find(
             Task.assignee_id == user_id,
+            Task.company_id == company_id,
             Task.status != TaskStatus.DONE
         ).sort([("due_date", 1)]).limit(limit).to_list()
         

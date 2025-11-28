@@ -3,10 +3,11 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from typing import List
 from bson import ObjectId
 from bson.errors import InvalidId
+from datetime import datetime
 
 from app.schemas.invitation import InvitationResponse, InvitationActionRequest
 from app.models.invitation import Invitation, InvitationStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.middleware.auth import get_current_user
 
 
@@ -37,7 +38,7 @@ async def get_sent_invitations(
     Only returns pending invitations.
     """
     invitations = await Invitation.find(
-        Invitation.company_name == current_user.company_name
+        Invitation.company_id == current_user.company_id
     ).to_list()
     
     return [
@@ -109,7 +110,7 @@ async def respond_to_invitation(
 ):
     """
     Accept or decline an invitation.
-    - If accepted, user's company_name is NOT changed (they can be part of multiple companies conceptually)
+    - If accepted, user's company_id and company_name are updated to join the new company
     - The invitation status is updated
     """
     obj_id = validate_object_id(invitation_id)
@@ -135,12 +136,17 @@ async def respond_to_invitation(
     
     if action.action == "accept":
         invitation.status = InvitationStatus.ACCEPTED
-        # Optionally update user's company or add to a list of companies
-        # For now, we just mark the invitation as accepted
+        # Update user's company to join the new company
+        current_user.company_id = invitation.company_id
+        current_user.company_name = invitation.company_name
+        # Set the role from the invitation
+        current_user.role = UserRole(invitation.role) if invitation.role in [r.value for r in UserRole] else UserRole.MEMBER
+        current_user.updated_at = datetime.utcnow()
+        await current_user.save()
     else:
         invitation.status = InvitationStatus.DECLINED
     
-    invitation.updated_at = __import__('datetime').datetime.utcnow()
+    invitation.updated_at = datetime.utcnow()
     await invitation.save()
     
     return InvitationResponse(

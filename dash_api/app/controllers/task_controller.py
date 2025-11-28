@@ -2,7 +2,7 @@
 from fastapi import HTTPException, status
 from typing import Dict, List, Optional
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 
 from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.user import User, UserRole
@@ -12,6 +12,17 @@ from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskStatusUpdate, TaskAssigneeUpdate,
     TaskResponse, TaskFilter
 )
+
+
+def is_task_overdue(due_date, task_status) -> bool:
+    """Check if a task is overdue based on its due_date and status."""
+    if not due_date or task_status == TaskStatus.DONE:
+        return False
+    today = datetime.utcnow().date()
+    # Handle both date and datetime types
+    if isinstance(due_date, datetime):
+        due_date = due_date.date()
+    return due_date < today
 
 
 class TaskController:
@@ -34,6 +45,10 @@ class TaskController:
     ) -> List[TaskResponse]:
         """Get all tasks with complex filtering."""
         query = {}
+        
+        # Filter by company - users can only see tasks in their own company
+        if current_user:
+            query["company_id"] = current_user.company_id
         
         # Apply filters
         if status:
@@ -61,22 +76,25 @@ class TaskController:
         
         # Handle date filters
         if date_filter and date_filter != "all":
-            today = datetime.utcnow().date()
+            # Use datetime for comparison since due_date is stored as datetime
+            today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+            today_end = datetime.combine(datetime.utcnow().date(), datetime.max.time())
             
             if date_filter == "today":
-                query["due_date"] = today
+                query["due_date"] = {"$gte": today_start, "$lte": today_end}
             
             elif date_filter == "this_week":
                 # Get start of week (Monday) and end of week (Sunday)
-                start_of_week = today - timedelta(days=today.weekday())
-                end_of_week = start_of_week + timedelta(days=6)
+                today = datetime.utcnow().date()
+                start_of_week = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time())
+                end_of_week = datetime.combine(today + timedelta(days=6 - today.weekday()), datetime.max.time())
                 query["due_date"] = {
                     "$gte": start_of_week,
                     "$lte": end_of_week
                 }
             
             elif date_filter == "overdue":
-                query["due_date"] = {"$lt": today}
+                query["due_date"] = {"$lt": today_start}
                 query["status"] = {"$ne": TaskStatus.DONE}
         
         # Get total count
@@ -92,14 +110,8 @@ class TaskController:
             .limit(limit)\
             .to_list()
         
-        # Check for overdue tasks
-        today = datetime.utcnow().date()
         task_responses = []
         for task in tasks:
-            is_overdue = False
-            if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-                is_overdue = True
-            
             task_responses.append(
                 TaskResponse(
                     id=str(task.id),
@@ -116,7 +128,7 @@ class TaskController:
                     project_name=task.project_name,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
-                    is_overdue=is_overdue
+                    is_overdue=is_task_overdue(task.due_date, task.status)
                 )
             )
         
@@ -130,6 +142,13 @@ class TaskController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this task"
             )
         
         # Get comments for this task
@@ -150,12 +169,6 @@ class TaskController:
             for comment in comments
         ]
         
-        # Check if overdue
-        today = datetime.utcnow().date()
-        is_overdue = False
-        if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-            is_overdue = True
-        
         task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -171,7 +184,7 @@ class TaskController:
             project_name=task.project_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            is_overdue=is_overdue
+            is_overdue=is_task_overdue(task.due_date, task.status)
         )
         
         return {
@@ -201,28 +214,28 @@ class TaskController:
                 )
             project_name = project.name
         
+        # Convert date to datetime for Beanie compatibility
+        due_date = data.due_date
+        if due_date and isinstance(due_date, date_type) and not isinstance(due_date, datetime):
+            due_date = datetime.combine(due_date, datetime.min.time())
+        
         # Create task
         task = Task(
             title=data.title,
             description=data.description,
             status=data.status,
             priority=data.priority,
-            due_date=data.due_date,
+            due_date=due_date,
             assignee_id=data.assignee_id,
             assignee_name=assignee.name,
             assignee_avatar=assignee.avatar_url,
             creator_id=str(current_user.id),
+            company_id=current_user.company_id,
             project_id=data.project_id,
             project_name=project_name
         )
         
         await task.insert()
-        
-        # Check if overdue
-        today = datetime.utcnow().date()
-        is_overdue = False
-        if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-            is_overdue = True
         
         return TaskResponse(
             id=str(task.id),
@@ -239,7 +252,7 @@ class TaskController:
             project_name=task.project_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            is_overdue=is_overdue
+            is_overdue=is_task_overdue(task.due_date, task.status)
         )
     
     @staticmethod
@@ -251,6 +264,13 @@ class TaskController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this task"
             )
         
         # Check permissions - creator, assignee, or admin can update
@@ -294,17 +314,16 @@ class TaskController:
                 task.project_name = None
             update_data.pop("project_id")
         
+        # Convert date to datetime for Beanie compatibility
+        if "due_date" in update_data and update_data["due_date"]:
+            if isinstance(update_data["due_date"], date_type) and not isinstance(update_data["due_date"], datetime):
+                update_data["due_date"] = datetime.combine(update_data["due_date"], datetime.min.time())
+        
         for field, value in update_data.items():
             setattr(task, field, value)
         
         task.updated_at = datetime.utcnow()
         await task.save()
-        
-        # Check if overdue
-        today = datetime.utcnow().date()
-        is_overdue = False
-        if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-            is_overdue = True
         
         return TaskResponse(
             id=str(task.id),
@@ -321,7 +340,7 @@ class TaskController:
             project_name=task.project_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            is_overdue=is_overdue
+            is_overdue=is_task_overdue(task.due_date, task.status)
         )
     
     @staticmethod
@@ -333,6 +352,13 @@ class TaskController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this task"
             )
         
         # Check permissions - creator, assignee, or admin can update
@@ -349,12 +375,6 @@ class TaskController:
         task.updated_at = datetime.utcnow()
         await task.save()
         
-        # Check if overdue
-        today = datetime.utcnow().date()
-        is_overdue = False
-        if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-            is_overdue = True
-        
         return TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -370,7 +390,7 @@ class TaskController:
             project_name=task.project_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            is_overdue=is_overdue
+            is_overdue=is_task_overdue(task.due_date, task.status)
         )
     
     @staticmethod
@@ -382,6 +402,13 @@ class TaskController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this task"
             )
         
         # Check permissions - creator or admin can reassign
@@ -406,12 +433,6 @@ class TaskController:
         task.updated_at = datetime.utcnow()
         await task.save()
         
-        # Check if overdue
-        today = datetime.utcnow().date()
-        is_overdue = False
-        if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-            is_overdue = True
-        
         return TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -427,7 +448,7 @@ class TaskController:
             project_name=task.project_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            is_overdue=is_overdue
+            is_overdue=is_task_overdue(task.due_date, task.status)
         )
     
     @staticmethod
@@ -439,6 +460,13 @@ class TaskController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to delete this task"
             )
         
         # Check permissions - creator, assignee, or admin can delete
@@ -465,17 +493,12 @@ class TaskController:
         """Get tasks assigned to me that are not done."""
         tasks = await Task.find(
             Task.assignee_id == str(current_user.id),
+            Task.company_id == current_user.company_id,
             Task.status != TaskStatus.DONE
         ).sort([("due_date", 1)]).limit(limit).to_list()
         
-        # Check for overdue tasks
-        today = datetime.utcnow().date()
         task_responses = []
         for task in tasks:
-            is_overdue = False
-            if task.due_date and task.due_date < today:
-                is_overdue = True
-            
             task_responses.append(
                 TaskResponse(
                     id=str(task.id),
@@ -492,7 +515,7 @@ class TaskController:
                     project_name=task.project_name,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
-                    is_overdue=is_overdue
+                    is_overdue=is_task_overdue(task.due_date, task.status)
                 )
             )
         
@@ -502,17 +525,12 @@ class TaskController:
     async def get_tasks_created_by_me(current_user: User, limit: int = 10) -> List[TaskResponse]:
         """Get tasks created by me."""
         tasks = await Task.find(
-            Task.creator_id == str(current_user.id)
+            Task.creator_id == str(current_user.id),
+            Task.company_id == current_user.company_id
         ).sort([("created_at", -1)]).limit(limit).to_list()
         
-        # Check for overdue tasks
-        today = datetime.utcnow().date()
         task_responses = []
         for task in tasks:
-            is_overdue = False
-            if task.due_date and task.due_date < today and task.status != TaskStatus.DONE:
-                is_overdue = True
-            
             task_responses.append(
                 TaskResponse(
                     id=str(task.id),
@@ -529,7 +547,7 @@ class TaskController:
                     project_name=task.project_name,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
-                    is_overdue=is_overdue
+                    is_overdue=is_task_overdue(task.due_date, task.status)
                 )
             )
         
@@ -538,12 +556,11 @@ class TaskController:
     @staticmethod
     async def get_task_stats(current_user: User) -> Dict:
         """Get task statistics for dashboard."""
-        today = datetime.utcnow().date()
-        
         # Aggregation pipeline for task statistics
         pipeline = [
             {
                 "$match": {
+                    "company_id": current_user.company_id,
                     "$or": [
                         {"assignee_id": str(current_user.id)},
                         {"creator_id": str(current_user.id)}
@@ -594,10 +611,11 @@ class TaskController:
         # Count overdue tasks manually (can't compare dates easily in aggregation)
         overdue_tasks = await Task.find(
             Task.assignee_id == str(current_user.id),
+            Task.company_id == current_user.company_id,
             Task.status != TaskStatus.DONE
         ).to_list()
         
-        overdue_count = sum(1 for task in overdue_tasks if task.due_date and task.due_date < today)
+        overdue_count = sum(1 for task in overdue_tasks if is_task_overdue(task.due_date, task.status))
         
         return {
             "tasks_completed": stats.get("completed", [{}])[0].get("count", 0) if stats.get("completed") else 0,

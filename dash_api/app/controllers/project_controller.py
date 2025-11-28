@@ -18,9 +18,13 @@ class ProjectController:
     """Project controller for handling project operations."""
     
     @staticmethod
-    async def get_all_projects(filter_data: ProjectFilter) -> List[ProjectResponse]:
+    async def get_all_projects(filter_data: ProjectFilter, current_user: User = None) -> List[ProjectResponse]:
         """Get all projects with complex filtering."""
         query = {}
+        
+        # Filter by company - users can only see projects in their own company
+        if current_user and current_user.company_id:
+            query["company_id"] = current_user.company_id
         
         # Apply filters
         if filter_data.status:
@@ -72,13 +76,20 @@ class ProjectController:
         return project_responses
     
     @staticmethod
-    async def get_project_by_id(project_id: str) -> ProjectResponse:
+    async def get_project_by_id(project_id: str, current_user: User = None) -> ProjectResponse:
         """Get a single project by ID."""
         project = await Project.get(project_id)
         if not project:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found"
+            )
+        
+        # Check company access
+        if current_user and project.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this project"
             )
         
         return ProjectResponse(
@@ -121,6 +132,8 @@ class ProjectController:
             due_date=due_date_dt,
             owner_id=owner_id,
             owner_name=owner.name,
+            company_id=current_user.company_id,
+            company_name=current_user.company_name,
             client_name=data.client_name
         )
         
@@ -148,6 +161,13 @@ class ProjectController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found"
+            )
+        
+        # Check company access - users can only update projects in their own company
+        if project.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this project"
             )
         
         # Check permissions - owner or admin can update
@@ -206,6 +226,13 @@ class ProjectController:
                 detail="Project not found"
             )
         
+        # Check company access - users can only update projects in their own company
+        if project.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this project"
+            )
+        
         # Check permissions - owner or admin can update
         if project.owner_id != str(current_user.id) and current_user.role != UserRole.ADMIN:
             raise HTTPException(
@@ -242,12 +269,27 @@ class ProjectController:
                 detail="Project not found"
             )
         
+        # Check company access - users can only delete projects in their own company
+        if project.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to delete this project"
+            )
+        
         # Check permissions - owner or admin can delete
         if project.owner_id != str(current_user.id) and current_user.role != UserRole.ADMIN:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to delete this project"
             )
+        
+        # Update all tasks associated with this project to have no project
+        from app.models.task import Task
+        tasks = await Task.find(Task.project_id == project_id).to_list()
+        for task in tasks:
+            task.project_id = None
+            task.project_name = None
+            await task.save()
         
         # Delete project
         await project.delete()
@@ -301,10 +343,18 @@ class ProjectController:
         return task_responses
     
     @staticmethod
-    async def get_project_owners() -> List[Dict[str, str]]:
+    async def get_project_owners(current_user: User = None) -> List[Dict[str, str]]:
         """Get unique list of project owners for filter dropdown."""
+        # Build match stage with company filter
+        match_stage = {}
+        if current_user and current_user.company_id:
+            match_stage["company_id"] = current_user.company_id
+        
         # Get all unique owner_id and owner_name combinations
         pipeline = [
+            {
+                "$match": match_stage
+            },
             {
                 "$group": {
                     "_id": "$owner_id",

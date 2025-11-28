@@ -32,6 +32,7 @@ class MongoDB:
             
             # Import models for Beanie initialization
             from app.models.user import User
+            from app.models.company import Company
             from app.models.project import Project
             from app.models.task import Task
             from app.models.comment import Comment
@@ -40,7 +41,7 @@ class MongoDB:
             # Initialize Beanie with document models
             await init_beanie(
                 database=database,
-                document_models=[User, Project, Task, Comment, Invitation]
+                document_models=[User, Company, Project, Task, Comment, Invitation]
             )
             
             logger.info("Successfully connected to MongoDB and initialized Beanie")

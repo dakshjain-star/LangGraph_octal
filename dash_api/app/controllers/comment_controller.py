@@ -15,7 +15,7 @@ class CommentController:
     """Comment controller for handling comment operations."""
     
     @staticmethod
-    async def get_task_comments(task_id: str) -> List[CommentResponse]:
+    async def get_task_comments(task_id: str, current_user: User) -> List[CommentResponse]:
         """Get all comments for a task, sorted by created_at."""
         # Check if task exists
         task = await Task.get(task_id)
@@ -23,6 +23,13 @@ class CommentController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this task"
             )
         
         # Get comments sorted by creation date
@@ -52,6 +59,13 @@ class CommentController:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
+            )
+        
+        # Check company access
+        if task.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this task"
             )
         
         # Create comment
