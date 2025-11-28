@@ -19,7 +19,7 @@ class DashboardController:
         """Get aggregated dashboard statistics for current user."""
         today = datetime.utcnow().date()
         user_id = str(current_user.id)
-        company_id = current_user.company_id
+        company_id = current_user.get_effective_company_id()
         
         # Use aggregation for efficiency
         pipeline = [
@@ -102,7 +102,7 @@ class DashboardController:
     async def get_recent_projects(current_user: User, limit: int = 5) -> List[ProjectResponse]:
         """Get recent projects I own or am involved in."""
         user_id = str(current_user.id)
-        company_id = current_user.company_id
+        company_id = current_user.get_effective_company_id()
         
         # Get projects owned by current user in their company
         projects = await Project.find(
@@ -131,7 +131,7 @@ class DashboardController:
     async def get_my_pending_tasks(current_user: User, limit: int = 5) -> List[TaskResponse]:
         """Get my pending tasks (not done), ordered by due_date."""
         user_id = str(current_user.id)
-        company_id = current_user.company_id
+        company_id = current_user.get_effective_company_id()
         today = datetime.utcnow().date()
         
         # Get tasks assigned to me that are not done in my company

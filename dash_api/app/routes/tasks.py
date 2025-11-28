@@ -39,6 +39,7 @@ async def get_tasks(
     sort_order: str = Query("desc"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    all_companies: bool = Query(False, description="If true, show tasks from all companies user belongs to"),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -54,6 +55,7 @@ async def get_tasks(
     - **sort_order**: Sort order (asc, desc)
     - **skip**: Number of records to skip (pagination)
     - **limit**: Maximum number of records to return
+    - **all_companies**: If true, show tasks from all companies user belongs to
     
     Requires authentication.
     """
@@ -69,7 +71,8 @@ async def get_tasks(
         sort_order=sort_order,
         skip=skip,
         limit=limit,
-        current_user=current_user
+        current_user=current_user,
+        all_companies=all_companies
     )
 
 
@@ -81,14 +84,16 @@ async def get_tasks(
     description="Get tasks assigned to the current user"
 )
 async def get_my_tasks(
+    all_companies: bool = Query(True, description="If true, show tasks from all companies user belongs to"),
     current_user: User = Depends(get_current_user)
 ):
     """
     Get all tasks assigned to the current user.
     
     Returns tasks where the current user is the assignee.
+    By default shows tasks from all companies the user belongs to.
     """
-    return await TaskController.get_my_tasks(current_user)
+    return await TaskController.get_my_tasks(current_user, all_companies=all_companies)
 
 
 @router.get(
@@ -99,14 +104,16 @@ async def get_my_tasks(
     description="Get tasks created by the current user"
 )
 async def get_tasks_created_by_me(
+    all_companies: bool = Query(True, description="If true, show tasks from all companies user belongs to"),
     current_user: User = Depends(get_current_user)
 ):
     """
     Get all tasks created by the current user.
     
     Returns tasks where the current user is the creator.
+    By default shows tasks from all companies the user belongs to.
     """
-    return await TaskController.get_tasks_created_by_me(current_user)
+    return await TaskController.get_tasks_created_by_me(current_user, all_companies=all_companies)
 
 
 @router.get(

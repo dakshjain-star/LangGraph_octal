@@ -1,6 +1,6 @@
 """User schemas for request and response validation."""
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
@@ -22,7 +22,7 @@ class UserBase(BaseModel):
     """Base user schema."""
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
-    company_name: str = Field(..., min_length=1, max_length=200)
+    company_name: str = Field(..., min_length=1, max_length=200)  # For display (comma-separated)
     avatar_url: Optional[str] = None
 
 
@@ -61,9 +61,17 @@ class UserStatusUpdate(BaseModel):
     status: UserStatus
 
 
-class UserResponse(UserBase):
+class UserResponse(BaseModel):
     """User response schema."""
     id: str
+    name: str
+    email: EmailStr
+    company_name: str  # Comma-separated string for display
+    company_names: Optional[List[str]] = None  # List of all company names
+    company_ids: Optional[List[str]] = None  # List of all company IDs
+    current_company_id: Optional[str] = None  # Currently active company
+    current_company_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     status: UserStatus
     role: UserRole
     email_notifications: bool
@@ -81,7 +89,11 @@ class UserResponse(UserBase):
                 "id": "507f1f77bcf86cd799439011",
                 "name": "John Doe",
                 "email": "john@example.com",
-                "company_name": "Acme Corp",
+                "company_name": "Acme Corp, Beta Inc",
+                "company_names": ["Acme Corp", "Beta Inc"],
+                "company_ids": ["company1", "company2"],
+                "current_company_id": "company1",
+                "current_company_name": "Acme Corp",
                 "avatar_url": "https://example.com/avatar.jpg",
                 "status": "Active",
                 "role": "Member",

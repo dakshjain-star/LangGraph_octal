@@ -8,6 +8,7 @@ from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.user import User, UserRole
 from app.models.project import Project
 from app.models.comment import Comment
+from app.models.company import Company
 from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskStatusUpdate, TaskAssigneeUpdate,
     TaskResponse, TaskFilter
@@ -41,14 +42,33 @@ class TaskController:
         sort_order: str = "desc",
         skip: int = 0,
         limit: int = 50,
-        current_user: User = None
+        current_user: User = None,
+        all_companies: bool = False
     ) -> List[TaskResponse]:
-        """Get all tasks with complex filtering."""
+        """Get all tasks with complex filtering.
+        
+        Args:
+            all_companies: If True, show tasks from all companies user belongs to
+        """
         query = {}
         
-        # Filter by company - users can only see tasks in their own company
+        # Filter by company - users can see tasks based on all_companies flag
         if current_user:
-            query["company_id"] = current_user.company_id
+            if all_companies:
+                # Show tasks from all companies user is associated with
+                company_ids = current_user.get_effective_company_ids()
+                if company_ids:
+                    query["company_id"] = {"$in": company_ids}
+                else:
+                    return []
+            else:
+                # Default: only show tasks from current effective company
+                effective_company_id = current_user.get_effective_company_id()
+                if effective_company_id:
+                    query["company_id"] = effective_company_id
+                else:
+                    # If no company, return empty list (shouldn't see any tasks)
+                    return []
         
         # Apply filters
         if status:
@@ -110,8 +130,25 @@ class TaskController:
             .limit(limit)\
             .to_list()
         
+        # Build a cache of company names for tasks missing company_name
+        company_ids_needing_names = set()
+        for task in tasks:
+            if task.company_id and not task.company_name:
+                company_ids_needing_names.add(task.company_id)
+        
+        company_name_cache = {}
+        if company_ids_needing_names:
+            companies = await Company.find({"_id": {"$in": list(company_ids_needing_names)}}).to_list()
+            for company in companies:
+                company_name_cache[str(company.id)] = company.name
+        
         task_responses = []
         for task in tasks:
+            # Get company name from task or look it up
+            company_name = task.company_name
+            if not company_name and task.company_id:
+                company_name = company_name_cache.get(task.company_id)
+            
             task_responses.append(
                 TaskResponse(
                     id=str(task.id),
@@ -126,6 +163,8 @@ class TaskController:
                     creator_id=task.creator_id,
                     project_id=task.project_id,
                     project_name=task.project_name,
+                    company_id=task.company_id,
+                    company_name=company_name,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
                     is_overdue=is_task_overdue(task.due_date, task.status)
@@ -144,8 +183,9 @@ class TaskController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.company_id:
+        # Check company access - allow access from any of user's companies
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"
@@ -169,6 +209,13 @@ class TaskController:
             for comment in comments
         ]
         
+        # Look up company name if missing
+        company_name = task.company_name
+        if not company_name and task.company_id:
+            company = await Company.find_one({"_id": task.company_id})
+            if company:
+                company_name = company.name
+        
         task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -182,6 +229,8 @@ class TaskController:
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
+            company_id=task.company_id,
+            company_name=company_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
@@ -219,6 +268,15 @@ class TaskController:
         if due_date and isinstance(due_date, date_type) and not isinstance(due_date, datetime):
             due_date = datetime.combine(due_date, datetime.min.time())
         
+        # Get company name
+        company_id = current_user.get_effective_company_id()
+        company_name = current_user.current_company_name
+        if company_id and not company_name:
+            # Look up company name if not available from user
+            company = await Company.get(company_id)
+            if company:
+                company_name = company.name
+        
         # Create task
         task = Task(
             title=data.title,
@@ -230,7 +288,8 @@ class TaskController:
             assignee_name=assignee.name,
             assignee_avatar=assignee.avatar_url,
             creator_id=str(current_user.id),
-            company_id=current_user.company_id,
+            company_id=company_id,
+            company_name=company_name,
             project_id=data.project_id,
             project_name=project_name
         )
@@ -250,6 +309,8 @@ class TaskController:
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
+            company_id=task.company_id,
+            company_name=current_user.current_company_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
@@ -266,8 +327,9 @@ class TaskController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.company_id:
+        # Check company access - allow access from any of user's companies
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this task"
@@ -338,6 +400,8 @@ class TaskController:
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
+            company_id=task.company_id,
+            company_name=task.company_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
@@ -354,8 +418,9 @@ class TaskController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.company_id:
+        # Check company access - allow access from any of user's companies
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this task"
@@ -388,6 +453,8 @@ class TaskController:
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
+            company_id=task.company_id,
+            company_name=task.company_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
@@ -404,8 +471,9 @@ class TaskController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.company_id:
+        # Check company access - allow access from any of user's companies
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this task"
@@ -446,6 +514,8 @@ class TaskController:
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
+            company_id=task.company_id,
+            company_name=task.company_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
@@ -462,8 +532,9 @@ class TaskController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.company_id:
+        # Check company access - allow access from any of user's companies
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to delete this task"
@@ -489,16 +560,54 @@ class TaskController:
         return {"message": "Task deleted successfully"}
     
     @staticmethod
-    async def get_my_tasks(current_user: User, limit: int = 10) -> List[TaskResponse]:
-        """Get tasks assigned to me that are not done."""
-        tasks = await Task.find(
-            Task.assignee_id == str(current_user.id),
-            Task.company_id == current_user.company_id,
-            Task.status != TaskStatus.DONE
-        ).sort([("due_date", 1)]).limit(limit).to_list()
+    async def get_my_tasks(current_user: User, limit: int = 10, all_companies: bool = False) -> List[TaskResponse]:
+        """Get tasks assigned to me that are not done.
+        
+        Args:
+            all_companies: If True, show tasks from all companies user belongs to
+        """
+        # Build company filter
+        if all_companies:
+            company_ids = current_user.get_effective_company_ids()
+            company_filter = {"$in": company_ids} if company_ids else None
+        else:
+            company_filter = current_user.get_effective_company_id()
+        
+        if not company_filter:
+            return []
+        
+        # Build query
+        query = {
+            "assignee_id": str(current_user.id),
+            "status": {"$ne": TaskStatus.DONE}
+        }
+        
+        if all_companies:
+            query["company_id"] = {"$in": current_user.get_effective_company_ids()}
+        else:
+            query["company_id"] = current_user.get_effective_company_id()
+        
+        tasks = await Task.find(query).sort([("due_date", 1)]).limit(limit).to_list()
+        
+        # Build a cache of company names for tasks missing company_name
+        company_ids_needing_names = set()
+        for task in tasks:
+            if task.company_id and not task.company_name:
+                company_ids_needing_names.add(task.company_id)
+        
+        company_name_cache = {}
+        if company_ids_needing_names:
+            companies = await Company.find({"_id": {"$in": list(company_ids_needing_names)}}).to_list()
+            for company in companies:
+                company_name_cache[str(company.id)] = company.name
         
         task_responses = []
         for task in tasks:
+            # Get company name from task or look it up
+            company_name = task.company_name
+            if not company_name and task.company_id:
+                company_name = company_name_cache.get(task.company_id)
+            
             task_responses.append(
                 TaskResponse(
                     id=str(task.id),
@@ -513,6 +622,8 @@ class TaskController:
                     creator_id=task.creator_id,
                     project_id=task.project_id,
                     project_name=task.project_name,
+                    company_id=task.company_id,
+                    company_name=company_name,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
                     is_overdue=is_task_overdue(task.due_date, task.status)
@@ -522,15 +633,49 @@ class TaskController:
         return task_responses
     
     @staticmethod
-    async def get_tasks_created_by_me(current_user: User, limit: int = 10) -> List[TaskResponse]:
-        """Get tasks created by me."""
-        tasks = await Task.find(
-            Task.creator_id == str(current_user.id),
-            Task.company_id == current_user.company_id
-        ).sort([("created_at", -1)]).limit(limit).to_list()
+    async def get_tasks_created_by_me(current_user: User, limit: int = 10, all_companies: bool = False) -> List[TaskResponse]:
+        """Get tasks created by me.
+        
+        Args:
+            all_companies: If True, show tasks from all companies user belongs to
+        """
+        # Build query
+        query = {"creator_id": str(current_user.id)}
+        
+        if all_companies:
+            company_ids = current_user.get_effective_company_ids()
+            if company_ids:
+                query["company_id"] = {"$in": company_ids}
+            else:
+                return []
+        else:
+            effective_company_id = current_user.get_effective_company_id()
+            if effective_company_id:
+                query["company_id"] = effective_company_id
+            else:
+                return []
+        
+        tasks = await Task.find(query).sort([("created_at", -1)]).limit(limit).to_list()
+        
+        # Build a cache of company names for tasks missing company_name
+        company_ids_needing_names = set()
+        for task in tasks:
+            if task.company_id and not task.company_name:
+                company_ids_needing_names.add(task.company_id)
+        
+        company_name_cache = {}
+        if company_ids_needing_names:
+            companies = await Company.find({"_id": {"$in": list(company_ids_needing_names)}}).to_list()
+            for company in companies:
+                company_name_cache[str(company.id)] = company.name
         
         task_responses = []
         for task in tasks:
+            # Get company name from task or look it up
+            company_name = task.company_name
+            if not company_name and task.company_id:
+                company_name = company_name_cache.get(task.company_id)
+            
             task_responses.append(
                 TaskResponse(
                     id=str(task.id),
@@ -545,6 +690,8 @@ class TaskController:
                     creator_id=task.creator_id,
                     project_id=task.project_id,
                     project_name=task.project_name,
+                    company_id=task.company_id,
+                    company_name=company_name,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
                     is_overdue=is_task_overdue(task.due_date, task.status)
@@ -554,13 +701,13 @@ class TaskController:
         return task_responses
     
     @staticmethod
-    async def get_task_stats(current_user: User) -> Dict:
+    async def get_task_stats(current_user: User, all_companies: bool = False) -> Dict:
         """Get task statistics for dashboard."""
         # Aggregation pipeline for task statistics
         pipeline = [
             {
                 "$match": {
-                    "company_id": current_user.company_id,
+                    "company_id": current_user.get_effective_company_id(),
                     "$or": [
                         {"assignee_id": str(current_user.id)},
                         {"creator_id": str(current_user.id)}
@@ -611,7 +758,7 @@ class TaskController:
         # Count overdue tasks manually (can't compare dates easily in aggregation)
         overdue_tasks = await Task.find(
             Task.assignee_id == str(current_user.id),
-            Task.company_id == current_user.company_id,
+            Task.company_id == current_user.get_effective_company_id(),
             Task.status != TaskStatus.DONE
         ).to_list()
         

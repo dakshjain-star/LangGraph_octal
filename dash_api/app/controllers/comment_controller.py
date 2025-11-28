@@ -26,7 +26,7 @@ class CommentController:
             )
         
         # Check company access
-        if task.company_id != current_user.company_id:
+        if task.company_id != current_user.get_effective_company_id():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"
@@ -62,7 +62,7 @@ class CommentController:
             )
         
         # Check company access
-        if task.company_id != current_user.company_id:
+        if task.company_id != current_user.get_effective_company_id():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"

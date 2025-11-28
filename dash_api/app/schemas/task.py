@@ -78,6 +78,8 @@ class TaskResponse(TaskBase):
     assignee_avatar: Optional[str]
     creator_id: str
     project_name: Optional[str]
+    company_id: Optional[str] = None
+    company_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     is_overdue: bool = False
@@ -118,6 +120,7 @@ class TaskFilter(BaseModel):
     sort_order: Optional[str] = "desc"  # asc, desc
     skip: int = 0
     limit: int = 50
+    all_companies: bool = False  # If True, show tasks from all companies user belongs to
     
     class Config:
         json_schema_extra = {

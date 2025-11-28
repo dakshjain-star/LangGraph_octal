@@ -23,8 +23,13 @@ class ProjectController:
         query = {}
         
         # Filter by company - users can only see projects in their own company
-        if current_user and current_user.company_id:
-            query["company_id"] = current_user.company_id
+        if current_user:
+            effective_company_id = current_user.get_effective_company_id()
+            if effective_company_id:
+                query["company_id"] = effective_company_id
+            else:
+                # If no company, return empty list (shouldn't see any projects)
+                return []
         
         # Apply filters
         if filter_data.status:
@@ -86,7 +91,7 @@ class ProjectController:
             )
         
         # Check company access
-        if current_user and project.company_id != current_user.company_id:
+        if current_user and project.company_id != current_user.get_effective_company_id():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this project"
@@ -132,8 +137,8 @@ class ProjectController:
             due_date=due_date_dt,
             owner_id=owner_id,
             owner_name=owner.name,
-            company_id=current_user.company_id,
-            company_name=current_user.company_name,
+            company_id=current_user.get_effective_company_id(),
+            company_name=current_user.current_company_name,
             client_name=data.client_name
         )
         
@@ -164,7 +169,7 @@ class ProjectController:
             )
         
         # Check company access - users can only update projects in their own company
-        if project.company_id != current_user.company_id:
+        if project.company_id != current_user.get_effective_company_id():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this project"
@@ -227,7 +232,7 @@ class ProjectController:
             )
         
         # Check company access - users can only update projects in their own company
-        if project.company_id != current_user.company_id:
+        if project.company_id != current_user.get_effective_company_id():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this project"
@@ -270,7 +275,7 @@ class ProjectController:
             )
         
         # Check company access - users can only delete projects in their own company
-        if project.company_id != current_user.company_id:
+        if project.company_id != current_user.get_effective_company_id():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to delete this project"
@@ -347,8 +352,8 @@ class ProjectController:
         """Get unique list of project owners for filter dropdown."""
         # Build match stage with company filter
         match_stage = {}
-        if current_user and current_user.company_id:
-            match_stage["company_id"] = current_user.company_id
+        if current_user and current_user.get_effective_company_id():
+            match_stage["company_id"] = current_user.get_effective_company_id()
         
         # Get all unique owner_id and owner_name combinations
         pipeline = [

@@ -31,9 +31,14 @@ class UserController:
         """Get all users with optional filters."""
         query = {}
         
-        # Filter by company - users can only see users in their own company
-        if current_user and current_user.company_id:
-            query["company_id"] = current_user.company_id
+        # Filter by company - users can only see users in their current company
+        # Search for users in both new and legacy company fields
+        if current_user and current_user.get_effective_company_id():
+            effective_company_id = current_user.get_effective_company_id()
+            query["$or"] = [
+                {"company_ids": effective_company_id},  # New field (array)
+                {"company_id": effective_company_id}     # Legacy field (single)
+            ]
         
         # Apply filters
         if status:
@@ -45,10 +50,23 @@ class UserController:
         if search:
             # Case-insensitive regex search on name and email
             search_regex = re.compile(re.escape(search), re.IGNORECASE)
-            query["$or"] = [
-                {"name": search_regex},
-                {"email": search_regex}
-            ]
+            # Combine with existing $or if present
+            if "$or" in query:
+                query = {
+                    "$and": [
+                        {"$or": query["$or"]},
+                        {"$or": [{"name": search_regex}, {"email": search_regex}]}
+                    ]
+                }
+                if status:
+                    query["status"] = status
+                if role:
+                    query["role"] = role
+            else:
+                query["$or"] = [
+                    {"name": search_regex},
+                    {"email": search_regex}
+                ]
         
         # Get total count
         total = await User.find(query).count()
@@ -62,7 +80,11 @@ class UserController:
                 id=str(user.id),
                 name=user.name,
                 email=user.email,
-                company_name=user.company_name,
+                company_name=", ".join(user.company_names) if user.company_names else "Individual",
+                company_names=user.company_names,
+                company_ids=user.company_ids,
+                current_company_id=user.current_company_id,
+                current_company_name=user.current_company_name,
                 avatar_url=user.avatar_url,
                 status=user.status,
                 role=user.role,
@@ -89,18 +111,24 @@ class UserController:
                 detail="User not found"
             )
         
-        # Check company access - users can only view users in their own company
-        if current_user and user.company_id != current_user.company_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this user"
-            )
+        # Check company access - users can only view users who share at least one company
+        if current_user and current_user.get_effective_company_id():
+            user_company_ids = user.get_effective_company_ids() if hasattr(user, 'get_effective_company_ids') else (user.company_ids or ([user.company_id] if user.company_id else []))
+            if current_user.get_effective_company_id() not in user_company_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to view this user"
+                )
         
         return UserResponse(
             id=str(user.id),
             name=user.name,
             email=user.email,
-            company_name=user.company_name,
+            company_name=", ".join(user.company_names) if user.company_names else "Individual",
+            company_names=user.company_names,
+            company_ids=user.company_ids,
+            current_company_id=user.current_company_id,
+            current_company_name=user.current_company_name,
             avatar_url=user.avatar_url,
             status=user.status,
             role=user.role,
@@ -152,7 +180,11 @@ class UserController:
             id=str(user.id),
             name=user.name,
             email=user.email,
-            company_name=user.company_name,
+            company_name=", ".join(user.company_names) if user.company_names else "Individual",
+            company_names=user.company_names,
+            company_ids=user.company_ids,
+            current_company_id=user.current_company_id,
+            current_company_name=user.current_company_name,
             avatar_url=user.avatar_url,
             status=user.status,
             role=user.role,
@@ -199,7 +231,11 @@ class UserController:
             id=str(user.id),
             name=user.name,
             email=user.email,
-            company_name=user.company_name,
+            company_name=", ".join(user.company_names) if user.company_names else "Individual",
+            company_names=user.company_names,
+            company_ids=user.company_ids,
+            current_company_id=user.current_company_id,
+            current_company_name=user.current_company_name,
             avatar_url=user.avatar_url,
             status=user.status,
             role=user.role,
@@ -246,7 +282,11 @@ class UserController:
             id=str(user.id),
             name=user.name,
             email=user.email,
-            company_name=user.company_name,
+            company_name=", ".join(user.company_names) if user.company_names else "Individual",
+            company_names=user.company_names,
+            company_ids=user.company_ids,
+            current_company_id=user.current_company_id,
+            current_company_name=user.current_company_name,
             avatar_url=user.avatar_url,
             status=user.status,
             role=user.role,
@@ -289,16 +329,36 @@ class UserController:
             )
         
         # Check if user belongs to the same company
-        if user.company_id != current_user.company_id:
+        user_company_ids = user.get_effective_company_ids() if hasattr(user, 'get_effective_company_ids') else (user.company_ids or ([user.company_id] if user.company_id else []))
+        if current_user.get_effective_company_id() not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot remove users from other companies"
             )
         
-        # Remove user from company by setting company to "Individual"
-        user.company_id = None
-        user.company_name = "Individual"
-        user.role = UserRole.MEMBER  # Reset role to Member
+        # Remove user from the current company (don't remove from all companies)
+        effective_company_id = current_user.get_effective_company_id()
+        if effective_company_id in (user.company_ids or []):
+            user.company_ids.remove(effective_company_id)
+        
+        # Also update the legacy company_id if it matches
+        if user.company_id == effective_company_id:
+            user.company_id = None
+            user.company_name = None
+        
+        effective_company_name = current_user.current_company_name or current_user.company_name
+        if effective_company_name and effective_company_name in (user.company_names or []):
+            user.company_names.remove(effective_company_name)
+        
+        # Update the current company to another one if available, or set to None
+        if user.company_ids:
+            user.current_company_id = user.company_ids[0]
+            user.current_company_name = user.company_names[0] if user.company_names else None
+        else:
+            user.current_company_id = None
+            user.current_company_name = None
+            user.role = UserRole.MEMBER  # Reset role to Member when no companies
+        
         user.updated_at = datetime.utcnow()
         await user.save()
         
@@ -323,7 +383,8 @@ class UserController:
             )
         
         # Check if user is already in this company
-        if existing_user.company_id == current_user.company_id:
+        existing_user_company_ids = existing_user.get_effective_company_ids() if hasattr(existing_user, 'get_effective_company_ids') else (existing_user.company_ids or ([existing_user.company_id] if existing_user.company_id else []))
+        if current_user.get_effective_company_id() in existing_user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User is already a member of your company"
@@ -332,7 +393,7 @@ class UserController:
         # Check if invitation already exists and is pending
         existing_invitation = await Invitation.find_one(
             Invitation.invitee_email == data.email,
-            Invitation.company_id == current_user.company_id,
+            Invitation.company_id == current_user.get_effective_company_id(),
             Invitation.status == InvitationStatus.PENDING
         )
         if existing_invitation:
@@ -342,11 +403,12 @@ class UserController:
             )
         
         # Create invitation
+        effective_company_name = current_user.current_company_name or current_user.company_name
         invitation = Invitation(
             invitee_email=data.email,
             invitee_user_id=str(existing_user.id),
-            company_id=current_user.company_id,
-            company_name=current_user.company_name,
+            company_id=current_user.get_effective_company_id(),
+            company_name=effective_company_name,
             inviter_id=str(current_user.id),
             inviter_name=current_user.name,
             role=data.role.value if hasattr(data.role, 'value') else str(data.role),
@@ -392,8 +454,15 @@ class UserController:
         }
         
         # Filter by company if current_user is provided
-        if current_user and current_user.company_id:
-            search_query["company_id"] = current_user.company_id
+        # Search for users in both new and legacy company fields
+        if current_user and current_user.get_effective_company_id():
+            effective_company_id = current_user.get_effective_company_id()
+            search_query["$and"] = [
+                {"$or": [
+                    {"company_ids": effective_company_id},  # New field (array)
+                    {"company_id": effective_company_id}     # Legacy field (single)
+                ]}
+            ]
         
         users = await User.find(search_query).limit(20).to_list()
         
@@ -402,7 +471,11 @@ class UserController:
                 id=str(user.id),
                 name=user.name,
                 email=user.email,
-                company_name=user.company_name,
+                company_name=", ".join(user.company_names) if user.company_names else "Individual",
+                company_names=user.company_names,
+                company_ids=user.company_ids,
+                current_company_id=user.current_company_id,
+                current_company_name=user.current_company_name,
                 avatar_url=user.avatar_url,
                 status=user.status,
                 role=user.role,

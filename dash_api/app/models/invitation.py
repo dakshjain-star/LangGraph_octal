@@ -22,7 +22,7 @@ class Invitation(Document):
     invitee_user_id: Optional[str] = None  # Set when user exists
     
     # The company/admin sending the invitation
-    company_id: str = Field(...)  # Reference to Company
+    company_id: Optional[str] = None  # Reference to Company (optional for legacy data)
     company_name: str = Field(..., min_length=1, max_length=200)
     inviter_id: str = Field(...)  # The admin who sent the invite
     inviter_name: str = Field(...)

@@ -35,6 +35,8 @@ class AuthController:
         
         company_id = None
         user_role = UserRole.MEMBER
+        company_ids = []
+        company_names = []
         
         if not existing_company:
             # This is a new company - user becomes Admin
@@ -43,14 +45,18 @@ class AuthController:
         else:
             # Company exists, user joins as Member
             company_id = str(existing_company.id)
+            company_ids = [company_id]
+            company_names = [data.company_name]
         
         # Create new user
         user = User(
             name=data.name,
             email=data.email,
             password_hash=get_password_hash(data.password),
-            company_id=company_id,
-            company_name=data.company_name,
+            company_ids=company_ids,
+            company_names=company_names,
+            current_company_id=company_id,
+            current_company_name=data.company_name if company_id else None,
             status=UserStatus.ACTIVE,
             role=user_role
         )
@@ -68,7 +74,10 @@ class AuthController:
             await company.insert()
             
             # Update user with company_id
-            user.company_id = str(company.id)
+            user.company_ids = [str(company.id)]
+            user.company_names = [data.company_name]
+            user.current_company_id = str(company.id)
+            user.current_company_name = data.company_name
             await user.save()
         
         # Create tokens

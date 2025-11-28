@@ -37,8 +37,12 @@ async def get_sent_invitations(
     Get all invitations sent by the admin of the current company.
     Only returns pending invitations.
     """
+    effective_company_id = current_user.get_effective_company_id()
+    if not effective_company_id:
+        return []
+    
     invitations = await Invitation.find(
-        Invitation.company_id == current_user.company_id
+        Invitation.company_id == effective_company_id
     ).to_list()
     
     return [
@@ -136,9 +140,14 @@ async def respond_to_invitation(
     
     if action.action == "accept":
         invitation.status = InvitationStatus.ACCEPTED
-        # Update user's company to join the new company
-        current_user.company_id = invitation.company_id
-        current_user.company_name = invitation.company_name
+        # Add the new company to user's list (don't replace existing companies)
+        if invitation.company_id not in current_user.company_ids:
+            current_user.company_ids.append(invitation.company_id)
+        if invitation.company_name not in current_user.company_names:
+            current_user.company_names.append(invitation.company_name)
+        # Set the new company as the current active company
+        current_user.current_company_id = invitation.company_id
+        current_user.current_company_name = invitation.company_name
         # Set the role from the invitation
         current_user.role = UserRole(invitation.role) if invitation.role in [r.value for r in UserRole] else UserRole.MEMBER
         current_user.updated_at = datetime.utcnow()

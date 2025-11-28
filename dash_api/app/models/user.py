@@ -1,7 +1,7 @@
 """User model for MongoDB."""
 from beanie import Document
 from pydantic import EmailStr, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
@@ -26,9 +26,17 @@ class User(Document):
     email: EmailStr = Field(..., unique=True)
     password_hash: str = Field(...)
     
-    # Company association
-    company_id: Optional[str] = Field(default=None)  # Reference to Company
-    company_name: str = Field(..., min_length=1, max_length=200)
+    # Legacy single company field (for backward compatibility with existing data)
+    company_id: Optional[str] = Field(default=None)
+    company_name: Optional[str] = Field(default=None)
+    
+    # Company associations - user can belong to multiple companies
+    company_ids: List[str] = Field(default_factory=list)  # List of Company IDs
+    company_names: List[str] = Field(default_factory=list)  # List of Company names
+    
+    # Current active company (the one user is currently working in)
+    current_company_id: Optional[str] = Field(default=None)
+    current_company_name: Optional[str] = Field(default=None)
     
     avatar_url: Optional[str] = None
     status: UserStatus = Field(default=UserStatus.ACTIVE)
@@ -49,7 +57,8 @@ class User(Document):
         name = "users"
         indexes = [
             "email",
-            "company_id",
+            "company_ids",
+            "current_company_id",
             "status",
             "role",
         ]
@@ -68,12 +77,22 @@ class User(Document):
     
     def dict_without_password(self) -> dict:
         """Return user dict without password_hash field."""
+        # Get effective company ID (prefer new field, fallback to legacy)
+        effective_company_id = self.current_company_id or self.company_id
+        effective_company_ids = self.company_ids if self.company_ids else ([self.company_id] if self.company_id else [])
+        effective_company_names = self.company_names if self.company_names else ([self.company_name] if self.company_name else [])
+        
         return {
             "id": str(self.id),
             "name": self.name,
             "email": self.email,
-            "company_id": self.company_id,
-            "company_name": self.company_name,
+            "company_ids": effective_company_ids,
+            "company_names": effective_company_names,
+            "current_company_id": effective_company_id,
+            "current_company_name": self.current_company_name or self.company_name,
+            # For backward compatibility
+            "company_id": effective_company_id,
+            "company_name": ", ".join(effective_company_names) if effective_company_names else "Individual",
             "avatar_url": self.avatar_url,
             "status": self.status,
             "role": self.role,
@@ -85,6 +104,18 @@ class User(Document):
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+    
+    def get_effective_company_id(self) -> Optional[str]:
+        """Get the effective current company ID (supports old and new schema)."""
+        return self.current_company_id or self.company_id
+    
+    def get_effective_company_ids(self) -> List[str]:
+        """Get all company IDs the user belongs to (supports old and new schema)."""
+        if self.company_ids:
+            return self.company_ids
+        elif self.company_id:
+            return [self.company_id]
+        return []
     
     async def update_timestamp(self):
         """Update the updated_at timestamp."""
