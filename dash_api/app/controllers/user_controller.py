@@ -13,6 +13,7 @@ from app.schemas.user import (
 from app.schemas.invitation import InvitationResponse
 from app.services.auth import get_password_hash
 from app.services.email import send_password_reset_email
+from app.services.websocket import notify_user_invited
 import secrets
 
 
@@ -417,10 +418,8 @@ class UserController:
         
         await invitation.insert()
         
-        # Optionally send email notification
-        # await send_invitation_email(...)
-        
-        return InvitationResponse(
+        # Prepare invitation response
+        invitation_response = InvitationResponse(
             id=str(invitation.id),
             invitee_email=invitation.invitee_email,
             invitee_user_id=invitation.invitee_user_id,
@@ -434,8 +433,20 @@ class UserController:
             updated_at=invitation.updated_at,
             expires_at=invitation.expires_at
         )
-    
-    @staticmethod
+        
+        # Send real-time WebSocket notification to the invitee
+        invitation_data = invitation_response.model_dump()
+        # Convert datetime objects for JSON serialization
+        if invitation_data.get('created_at'):
+            invitation_data['created_at'] = invitation_data['created_at'].isoformat() if hasattr(invitation_data['created_at'], 'isoformat') else str(invitation_data['created_at'])
+        if invitation_data.get('updated_at'):
+            invitation_data['updated_at'] = invitation_data['updated_at'].isoformat() if hasattr(invitation_data['updated_at'], 'isoformat') else str(invitation_data['updated_at'])
+        if invitation_data.get('expires_at'):
+            invitation_data['expires_at'] = invitation_data['expires_at'].isoformat() if hasattr(invitation_data['expires_at'], 'isoformat') else str(invitation_data['expires_at'])
+        
+        await notify_user_invited(invitation_data, str(existing_user.id))
+        
+        return invitation_response
     async def search_users(query: str, current_user: User = None) -> List[UserResponse]:
         """Search users by name or email."""
         if not query or len(query.strip()) == 0:

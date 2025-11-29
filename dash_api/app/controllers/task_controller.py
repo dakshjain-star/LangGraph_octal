@@ -13,6 +13,10 @@ from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskStatusUpdate, TaskAssigneeUpdate,
     TaskResponse, TaskFilter
 )
+from app.services.websocket import (
+    notify_task_created, notify_task_updated, 
+    notify_task_assigned, notify_task_deleted
+)
 
 
 def is_task_overdue(due_date, task_status) -> bool:
@@ -315,6 +319,24 @@ class TaskController:
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
         )
+        
+        # Send WebSocket notifications
+        task_data = task_response.model_dump()
+        # Convert datetime objects to ISO strings for JSON serialization
+        if task_data.get('due_date'):
+            task_data['due_date'] = task_data['due_date'].isoformat() if hasattr(task_data['due_date'], 'isoformat') else str(task_data['due_date'])
+        if task_data.get('created_at'):
+            task_data['created_at'] = task_data['created_at'].isoformat() if hasattr(task_data['created_at'], 'isoformat') else str(task_data['created_at'])
+        if task_data.get('updated_at'):
+            task_data['updated_at'] = task_data['updated_at'].isoformat() if hasattr(task_data['updated_at'], 'isoformat') else str(task_data['updated_at'])
+        
+        await notify_task_created(task_data, company_id, str(current_user.id))
+        
+        # Notify assignee specifically if different from creator
+        if data.assignee_id != str(current_user.id):
+            await notify_task_assigned(task_data, data.assignee_id, str(current_user.id))
+        
+        return task_response
     
     @staticmethod
     async def update_task(task_id: str, data: TaskUpdate, current_user: User) -> TaskResponse:
@@ -326,6 +348,9 @@ class TaskController:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
             )
+        
+        # Store original assignee for notification tracking
+        original_assignee_id = task.assignee_id
         
         # Check company access - allow access from any of user's companies
         user_company_ids = current_user.get_effective_company_ids()
@@ -387,7 +412,11 @@ class TaskController:
         task.updated_at = datetime.utcnow()
         await task.save()
         
-        return TaskResponse(
+        # Track if assignee changed for notification
+        assignee_changed = "assignee_id" in data.model_dump(exclude_unset=True)
+        old_assignee_id = original_assignee_id if assignee_changed else None
+        
+        task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
             description=task.description,
@@ -406,6 +435,24 @@ class TaskController:
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
         )
+        
+        # Send WebSocket notifications
+        task_data = task_response.model_dump()
+        # Convert datetime objects to ISO strings for JSON serialization
+        if task_data.get('due_date'):
+            task_data['due_date'] = task_data['due_date'].isoformat() if hasattr(task_data['due_date'], 'isoformat') else str(task_data['due_date'])
+        if task_data.get('created_at'):
+            task_data['created_at'] = task_data['created_at'].isoformat() if hasattr(task_data['created_at'], 'isoformat') else str(task_data['created_at'])
+        if task_data.get('updated_at'):
+            task_data['updated_at'] = task_data['updated_at'].isoformat() if hasattr(task_data['updated_at'], 'isoformat') else str(task_data['updated_at'])
+        
+        await notify_task_updated(task_data, task.company_id, str(current_user.id))
+        
+        # If assignee changed, notify new assignee
+        if assignee_changed and task.assignee_id != str(current_user.id):
+            await notify_task_assigned(task_data, task.assignee_id, str(current_user.id))
+        
+        return task_response
     
     @staticmethod
     async def update_task_status(task_id: str, data: TaskStatusUpdate, current_user: User) -> TaskResponse:
@@ -554,8 +601,14 @@ class TaskController:
         for comment in comments:
             await comment.delete()
         
+        # Store company_id before deletion for notification
+        company_id = task.company_id
+        
         # Delete task
         await task.delete()
+        
+        # Send WebSocket notification
+        await notify_task_deleted(task_id, company_id, str(current_user.id))
         
         return {"message": "Task deleted successfully"}
     

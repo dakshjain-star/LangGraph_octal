@@ -15,7 +15,8 @@ from app.routes import (
     comments_router,
     dashboard_router,
     settings_router,
-    invitations_router
+    invitations_router,
+    websocket_router
 )
 
 # Configure logging
@@ -100,6 +101,7 @@ app.include_router(comments_router, prefix=f"{settings.api_prefix}", tags=["Comm
 app.include_router(dashboard_router, prefix=f"{settings.api_prefix}/dashboard", tags=["Dashboard"])
 app.include_router(settings_router, prefix=f"{settings.api_prefix}/settings", tags=["Settings"])
 app.include_router(invitations_router, prefix=f"{settings.api_prefix}/invitations", tags=["Invitations"])
+app.include_router(websocket_router, prefix=f"{settings.api_prefix}", tags=["WebSocket"])
 
 
 # Root endpoint

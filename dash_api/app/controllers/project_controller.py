@@ -12,6 +12,9 @@ from app.schemas.project import (
     ProjectResponse, ProjectFilter
 )
 from app.schemas.task import TaskResponse
+from app.services.websocket import (
+    notify_project_created, notify_project_updated, notify_project_deleted
+)
 
 
 class ProjectController:
@@ -144,7 +147,7 @@ class ProjectController:
         
         await project.insert()
         
-        return ProjectResponse(
+        project_response = ProjectResponse(
             id=str(project.id),
             name=project.name,
             description=project.description,
@@ -156,6 +159,20 @@ class ProjectController:
             created_at=project.created_at,
             updated_at=project.updated_at
         )
+        
+        # Send WebSocket notification
+        project_data = project_response.model_dump()
+        # Convert datetime objects to ISO strings for JSON serialization
+        if project_data.get('due_date'):
+            project_data['due_date'] = str(project_data['due_date'])
+        if project_data.get('created_at'):
+            project_data['created_at'] = project_data['created_at'].isoformat() if hasattr(project_data['created_at'], 'isoformat') else str(project_data['created_at'])
+        if project_data.get('updated_at'):
+            project_data['updated_at'] = project_data['updated_at'].isoformat() if hasattr(project_data['updated_at'], 'isoformat') else str(project_data['updated_at'])
+        
+        await notify_project_created(project_data, project.company_id, str(current_user.id))
+        
+        return project_response
     
     @staticmethod
     async def update_project(project_id: str, data: ProjectUpdate, current_user: User) -> ProjectResponse:
@@ -207,7 +224,7 @@ class ProjectController:
         project.updated_at = datetime.utcnow()
         await project.save()
         
-        return ProjectResponse(
+        project_response = ProjectResponse(
             id=str(project.id),
             name=project.name,
             description=project.description,
@@ -219,6 +236,19 @@ class ProjectController:
             created_at=project.created_at,
             updated_at=project.updated_at
         )
+        
+        # Send WebSocket notification
+        project_data = project_response.model_dump()
+        if project_data.get('due_date'):
+            project_data['due_date'] = str(project_data['due_date'])
+        if project_data.get('created_at'):
+            project_data['created_at'] = project_data['created_at'].isoformat() if hasattr(project_data['created_at'], 'isoformat') else str(project_data['created_at'])
+        if project_data.get('updated_at'):
+            project_data['updated_at'] = project_data['updated_at'].isoformat() if hasattr(project_data['updated_at'], 'isoformat') else str(project_data['updated_at'])
+        
+        await notify_project_updated(project_data, project.company_id, str(current_user.id))
+        
+        return project_response
     
     @staticmethod
     async def update_project_status(project_id: str, data: ProjectStatusUpdate, current_user: User) -> ProjectResponse:
@@ -296,8 +326,14 @@ class ProjectController:
             task.project_name = None
             await task.save()
         
+        # Store company_id before deletion for notification
+        company_id = project.company_id
+        
         # Delete project
         await project.delete()
+        
+        # Send WebSocket notification
+        await notify_project_deleted(project_id, company_id, str(current_user.id))
         
         return {"message": "Project deleted successfully"}
     

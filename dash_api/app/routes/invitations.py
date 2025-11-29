@@ -9,6 +9,7 @@ from app.schemas.invitation import InvitationResponse, InvitationActionRequest
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.user import User, UserRole
 from app.middleware.auth import get_current_user
+from app.services.websocket import notify_invitation_response, notify_user_joined
 
 
 def validate_object_id(id_str: str) -> ObjectId:
@@ -158,7 +159,7 @@ async def respond_to_invitation(
     invitation.updated_at = datetime.utcnow()
     await invitation.save()
     
-    return InvitationResponse(
+    invitation_response = InvitationResponse(
         id=str(invitation.id),
         invitee_email=invitation.invitee_email,
         invitee_user_id=invitation.invitee_user_id,
@@ -172,6 +173,34 @@ async def respond_to_invitation(
         updated_at=invitation.updated_at,
         expires_at=invitation.expires_at
     )
+    
+    # Send WebSocket notification to inviter about the response
+    invitation_data = invitation_response.model_dump()
+    # Convert enum to string value for JSON serialization
+    if invitation_data.get('status'):
+        invitation_data['status'] = invitation_data['status'].value if hasattr(invitation_data['status'], 'value') else str(invitation_data['status'])
+    if invitation_data.get('created_at'):
+        invitation_data['created_at'] = invitation_data['created_at'].isoformat() if hasattr(invitation_data['created_at'], 'isoformat') else str(invitation_data['created_at'])
+    if invitation_data.get('updated_at'):
+        invitation_data['updated_at'] = invitation_data['updated_at'].isoformat() if hasattr(invitation_data['updated_at'], 'isoformat') else str(invitation_data['updated_at'])
+    if invitation_data.get('expires_at'):
+        invitation_data['expires_at'] = invitation_data['expires_at'].isoformat() if hasattr(invitation_data['expires_at'], 'isoformat') else str(invitation_data['expires_at'])
+    
+    await notify_invitation_response(invitation_data, invitation.inviter_id, action.action)
+    
+    # If user accepted, notify all company members that a new user joined
+    if action.action == "accept":
+        user_data = {
+            "id": str(current_user.id),
+            "name": current_user.name,
+            "email": current_user.email,
+            "role": current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role),
+            "avatar_url": current_user.avatar_url,
+            "status": current_user.status.value if hasattr(current_user.status, 'value') else str(current_user.status),
+        }
+        await notify_user_joined(user_data, invitation.company_id)
+    
+    return invitation_response
 
 
 @router.delete(
