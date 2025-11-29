@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     port: int = 8000
     
     # MongoDB
-    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_url: str = "mongodb+srv://octaldaksh:octal123@cluster0.5xt6n.mongodb.net/"
     mongodb_db_name: str = "dash_saas"
     mongodb_min_pool_size: int = 10
     mongodb_max_pool_size: int = 50

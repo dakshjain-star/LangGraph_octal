@@ -2,6 +2,7 @@
 import aiosmtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from typing import Optional
 from jinja2 import Template
 import logging
 
