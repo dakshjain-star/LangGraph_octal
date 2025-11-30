@@ -156,6 +156,7 @@ class WebSocketEventType:
     TASK_UPDATED = "TASK_UPDATED"
     TASK_DELETED = "TASK_DELETED"
     TASK_ASSIGNED = "TASK_ASSIGNED"
+    TASK_UNASSIGNED = "TASK_UNASSIGNED"
     TASK_STATUS_CHANGED = "TASK_STATUS_CHANGED"
     
     # Project events
@@ -220,6 +221,21 @@ async def notify_task_assigned(task_data: dict, assignee_id: str, assigner_id: s
             "payload": {
                 **task_data,
                 "message": f"A new task '{task_data.get('title', 'Unknown')}' has been assigned to you"
+            }
+        }
+    )
+
+
+async def notify_task_unassigned(task_data: dict, old_assignee_id: str, assigner_id: str = None):
+    """Notify a user when a task is unassigned from them (reassigned to someone else)."""
+    # Send to the old assignee specifically
+    await manager.send_to_user(
+        old_assignee_id,
+        {
+            "type": WebSocketEventType.TASK_UNASSIGNED,
+            "payload": {
+                **task_data,
+                "message": f"Task '{task_data.get('title', 'Unknown')}' has been reassigned to another user"
             }
         }
     )
@@ -299,6 +315,21 @@ async def notify_comment_added(comment_data: dict, task_id: str, company_id: str
             }
         },
         exclude_user=commenter_id
+    )
+
+
+async def notify_comment_deleted(comment_id: str, task_id: str, company_id: str, deleter_id: str = None):
+    """Notify relevant users when a comment is deleted."""
+    await manager.broadcast_to_company(
+        company_id,
+        {
+            "type": WebSocketEventType.COMMENT_DELETED,
+            "payload": {
+                "comment_id": comment_id,
+                "task_id": task_id
+            }
+        },
+        exclude_user=deleter_id
     )
 
 

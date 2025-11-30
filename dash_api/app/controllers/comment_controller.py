@@ -9,6 +9,7 @@ from app.models.user import User, UserRole
 from app.schemas.comment import (
     CommentCreate, CommentUpdate, CommentResponse
 )
+from app.services.websocket import notify_comment_added, notify_comment_deleted
 
 
 class CommentController:
@@ -78,7 +79,7 @@ class CommentController:
         
         await comment.insert()
         
-        return CommentResponse(
+        comment_response = CommentResponse(
             id=str(comment.id),
             task_id=comment.task_id,
             user_id=comment.user_id,
@@ -87,6 +88,18 @@ class CommentController:
             created_at=comment.created_at,
             updated_at=comment.updated_at
         )
+        
+        # Send WebSocket notification
+        comment_data = comment_response.model_dump()
+        # Convert datetime objects to ISO strings for JSON serialization
+        if comment_data.get('created_at'):
+            comment_data['created_at'] = comment_data['created_at'].isoformat() if hasattr(comment_data['created_at'], 'isoformat') else str(comment_data['created_at'])
+        if comment_data.get('updated_at'):
+            comment_data['updated_at'] = comment_data['updated_at'].isoformat() if hasattr(comment_data['updated_at'], 'isoformat') else str(comment_data['updated_at'])
+        
+        await notify_comment_added(comment_data, task_id, task.company_id, str(current_user.id))
+        
+        return comment_response
     
     @staticmethod
     async def update_comment(comment_id: str, data: CommentUpdate, current_user: User) -> CommentResponse:
@@ -139,7 +152,16 @@ class CommentController:
                 detail="Not authorized to delete this comment"
             )
         
+        # Get task to find company_id for WebSocket notification
+        task = await Task.get(comment.task_id)
+        task_id = comment.task_id
+        comment_id = str(comment.id)
+        
         # Delete comment
         await comment.delete()
+        
+        # Send WebSocket notification
+        if task:
+            await notify_comment_deleted(comment_id, task_id, task.company_id, str(current_user.id))
         
         return {"message": "Comment deleted successfully"}
