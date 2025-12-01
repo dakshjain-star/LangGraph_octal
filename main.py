@@ -1,142 +1,162 @@
+"""
+LangGraph Task Management Chatbot - Integrated with dash_saas.
+Uses the same JWT authentication and database as the main dashboard API.
+"""
+import asyncio
 import os
 import random
-from typing import Annotated, List, Optional, Dict, Any
+import sys
+from typing import Annotated, Optional, Dict, Any
 from typing_extensions import TypedDict
+from contextlib import asynccontextmanager
+
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_ollama import ChatOllama
-from bson.objectid import ObjectId
-import bcrypt
+from langgraph.prebuilt import ToolNode
+
 import warnings
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
+
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body, Header, Depends
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-import jwt
-from jwt.exceptions import InvalidTokenError
 
-# Import from new modules
-from model import db
-from tools import tools
+# Add dash_api to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'dash_api'))
+
+# Import authentication from dash_api
+from dash_api.app.services.auth import verify_token as dash_verify_token
+from dash_api.app.config import settings as dash_settings
+
+# Import database connection
+from model import connect_db, close_db
+
+# Import tools
+from tools import tools, set_main_loop
 
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_core")
 warnings.filterwarnings("ignore", message=".*Pydantic V1.*")
 
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-use-env-variable")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30
-
-# JWT Helper Functions
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    """Create a JWT access token."""
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def decode_access_token(token: str):
-    """Decode and verify JWT token."""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except InvalidTokenError:
-        return None
-
+# Security
 security = HTTPBearer()
+
 
 # --- State Definition ---
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     user_id: Optional[str]
     user_name: Optional[str]
+    company_id: Optional[str]
+
 
 # --- INITIALIZE OLLAMA ---
-# We use the specific model you requested.
-# ensure "ollama serve" is running in your terminal.
-
 llm = ChatOllama(
-    model="gpt-oss:120b-cloud",  # <--- YOUR SPECIFIC MODEL
+    model="gpt-oss:120b-cloud",
     temperature=0,
-    base_url="http://localhost:11434" # Default Ollama URL
+    base_url="http://localhost:11434"
 ).bind_tools(tools)
 
-# --- Nodes ---
 
-def build_system_prompt(user_id: Optional[str], user_name: Optional[str]) -> str:
-    """Create a dynamic task management system prompt with rotating guidance."""
+# --- System Prompt Builder ---
+def build_system_prompt(user_id: str, user_name: str, company_id: str) -> str:
+    """Create a dynamic task management system prompt."""
     assistant_roles = [
-        "You are a helpful Task Management Assistant that helps users create, view, update, and delete tasks.",
+        "You are a helpful Task Management Assistant integrated into the Dash SaaS dashboard.",
         "Act as a Task Assistant focused on helping users manage their work assignments and deadlines.",
         "You are a Task Management co-pilot dedicated to helping users organize and track their tasks."
     ]
-    greeting_rules = [
-        "Detect greetings (hi, hello, hey, morning, evening, namaste, etc.) and respond warmly starting with 'Hello {display_name}!'",
-        "When users greet you, respond with 'Hello {display_name}!' and ask how you can help with their tasks.",
-        "Respond to greetings by saying 'Hello {display_name}!' and offering task management assistance."
-    ]
-
+    
     display_name = user_name or "there"
-    greeting_instruction = random.choice(greeting_rules).format(display_name=display_name)
 
     return f"""
 {random.choice(assistant_roles)}
-Current User ID: {user_id}.
 
-General Behavior:
+**Current User Context:**
+- User ID: {user_id}
+- User Name: {display_name}
+- Company ID: {company_id}
+
+**General Behavior:**
 - Be helpful, friendly, and concise in your responses.
-- {greeting_instruction}
+- When users greet you, respond warmly with "Hello {display_name}!" and offer assistance.
 - When users say thank you, respond politely and ask if they need anything else.
 
-Task Workflow Rules:
-1. ALWAYS pass '{user_id}' as the 'current_user_id' argument when invoking any tool.
-2. Do not fabricate task IDs; use only the IDs returned by the 'view_my_tasks' tool.
-3. When creating a task you MUST collect Title, Start Date (YYYY-MM-DD), End Date (YYYY-MM-DD), and Assignee Email. Ask for optional Description and Priority.
-4. The 'assigned_by' field is implicitly the current user ({user_id}); never ask the user for it.
-5. When user asks to "show users", "list users", or "who can I assign tasks to", call the 'list_users' tool with the current_user_id.
-6. Present task lists as bulleted items with nested fields exactly like:
-   * **Task Title** (ID: <id>)
-     * **Description:** <desc>
-     * **Priority:** <priority>
-     * **Start Date:** <start>
-     * **End Date:** <end>
-     * **Assigned By:** <full name, email>
-     * **Assignee:** <full name, email>
-7. If required fields are missing, ask for them before executing 'create_task'.
+**Task Management Workflow:**
+
+1. **ALWAYS** pass these system parameters to every tool:
+   - 'current_user_id': '{user_id}'
+   - 'company_id': '{company_id}'
+
+2. **Creating Tasks:**
+   - Required: Title, Due Date (YYYY-MM-DD), Assignee ID
+   - Optional: Description, Priority (Low/Medium/High), Project ID
+   - FIRST use 'list_users' to get assignable user IDs
+   - Optionally use 'list_projects' to get project IDs
+   - Users cannot assign tasks to themselves
+
+3. **Viewing Tasks:**
+   - Use 'view_my_tasks' to see tasks assigned to or created by the user
+   - Use 'get_task_stats' for a summary overview
+
+4. **Updating Tasks:**
+   - Use 'update_task_status' to change status (To Do, In Progress, Review, Done)
+   - Use 'update_task_priority' to change priority (Low, Medium, High)
+   - Get task IDs from 'view_my_tasks' first
+
+5. **Deleting Tasks:**
+   - Use 'delete_task' - only creators can delete their tasks
+   - Get task IDs from 'view_my_tasks' first
+
+**Task Display Format:**
+Present task lists as bulleted items:
+* **Task Title** (ID: <id>)
+  * **Status:** <status>
+  * **Priority:** <priority>
+  * **Due Date:** <date>
+  * **Assignee:** <name>
+  * **Created By:** <name>
+  * **Project:** <project name or "No project">
+
+**Important Rules:**
+- Never fabricate task IDs; use only IDs from 'view_my_tasks'
+- If required fields are missing, ask for them before proceeding
+- When showing users for assignment, include their IDs for easy reference
 """
 
-def chatbot_node(state: AgentState):
-    user_id = state["user_id"]
+
+# --- LangGraph Nodes ---
+async def chatbot_node(state: AgentState):
+    """Main chatbot node that processes messages."""
+    user_id = state.get("user_id", "")
+    user_name = state.get("user_name", "User")
+    company_id = state.get("company_id", "")
     
-    # System prompt is critical for local models to understand they must use the ID
-    sys_msg = SystemMessage(content=build_system_prompt(user_id, state.get("user_name")))
-    
+    sys_msg = SystemMessage(content=build_system_prompt(user_id, user_name, company_id))
     messages = [sys_msg] + state["messages"]
-    response = llm.invoke(messages)
+    response = await llm.ainvoke(messages)
     return {"messages": [response]}
 
-from langgraph.prebuilt import ToolNode
+
 tool_node = ToolNode(tools)
+
 
 # --- Graph Construction ---
 workflow = StateGraph(AgentState)
-
 workflow.add_node("chatbot", chatbot_node)
 workflow.add_node("tools", tool_node)
 
+
 def should_continue(state: AgentState):
+    """Decide whether to continue to tools or end."""
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
+    if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
         return "tools"
     return END
+
 
 workflow.add_edge(START, "chatbot")
 workflow.add_conditional_edges("chatbot", should_continue)
@@ -144,197 +164,251 @@ workflow.add_edge("tools", "chatbot")
 
 graph_app = workflow.compile()
 
+
 # ============================================================================
-# FastAPI Server
+# FastAPI Application
 # ============================================================================
 
-api_app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan - connect/disconnect from database."""
+    # Startup
+    # Set the main event loop reference for tools to use
+    set_main_loop(asyncio.get_running_loop())
+    await connect_db()
+    yield
+    # Shutdown
+    await close_db()
+
+
+api_app = FastAPI(
+    title="Dash SaaS Chatbot API",
+    description="LangGraph-powered Task Management Chatbot integrated with Dash SaaS",
+    version="2.0.0",
+    lifespan=lifespan
+)
 
 # Enable CORS
 api_app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origin
+    allow_origins=["*"],  # In production, replace with specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # In-memory session store
-# Format: {user_id: {"messages": [], "user_name": str, "email": str}}
+# Format: {user_id: {"messages": [], "user_name": str, "company_id": str}}
 sessions: Dict[str, Dict[str, Any]] = {}
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
 
+# --- Pydantic Models ---
 class ChatRequest(BaseModel):
+    """Chat message request."""
     message: str
-    token: str
 
-class ResetChatRequest(BaseModel):
-    token: str
 
-class VerifyTokenRequest(BaseModel):
-    token: str
+class ChatResponse(BaseModel):
+    """Chat response."""
+    response: str
+    history: list
 
-@api_app.post("/login")
-def login(req: LoginRequest):
-    user = db.users.find_one({"email": req.email})
-    if user and bcrypt.checkpw(req.password.encode('utf-8'), user['password']):
-        user_id = str(user["_id"])
-        
-        # Create JWT token with user data
-        token_data = {
-            "sub": user_id,
-            "email": req.email,
-            "user_name": user["first_name"]
-        }
-        access_token = create_access_token(data=token_data)
-        
-        # Initialize or reuse session for this user_id
-        if user_id not in sessions:
-            sessions[user_id] = {
-                "messages": [],
-                "user_id": user_id,
-                "user_name": user["first_name"],
-                "email": req.email
-            }
-        
-        return {
-            "token": access_token,
-            "user_id": user_id,
-            "user_name": user["first_name"],
-            "email": req.email,
-            "status": "success"
-        }
-    raise HTTPException(status_code=401, detail="Invalid credentials")
 
-@api_app.post("/chat")
-def chat(req: ChatRequest):
-    # Verify and decode JWT token
-    payload = decode_access_token(req.token)
+class ResetResponse(BaseModel):
+    """Reset chat response."""
+    status: str
+    message: str
+
+
+# --- Authentication Dependency ---
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> Dict[str, Any]:
+    """
+    Validate JWT token using dash_api's authentication.
+    Returns user info extracted from the token.
+    """
+    token = credentials.credentials
+    
+    # Use dash_api's token verification
+    payload = dash_verify_token(token, token_type="access")
     if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     user_id = payload.get("sub")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
-    # Extract user data from token
-    token_data = {
-        "user_id": user_id,
-        "email": payload.get("email"),
-        "user_name": payload.get("user_name")
+    # Get full user info from database
+    from dash_api.app.models.user import User
+    user = await User.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return {
+        "user_id": str(user.id),
+        "user_name": user.name,
+        "email": user.email,
+        "company_id": user.get_effective_company_id(),
+        "company_name": user.current_company_name or user.company_name,
+        "role": user.role.value if user.role else "Member"
     }
+
+
+# --- API Endpoints ---
+
+@api_app.post("/chat", response_model=ChatResponse)
+async def chat(
+    req: ChatRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Process a chat message and return the AI response.
+    Uses the same JWT authentication as the main Dash SaaS API.
+    """
+    user_id = current_user["user_id"]
+    user_name = current_user["user_name"]
+    company_id = current_user["company_id"]
     
-    # Initialize session if it doesn't exist (e.g., after server restart)
+    if not company_id:
+        raise HTTPException(
+            status_code=400,
+            detail="User is not associated with any company"
+        )
+    
+    # Initialize or retrieve session
     if user_id not in sessions:
         sessions[user_id] = {
             "messages": [],
-            "user_id": user_id,
-            "user_name": token_data["user_name"],
-            "email": token_data["email"]
+            "user_name": user_name,
+            "company_id": company_id
         }
     
     session = sessions[user_id]
+    
+    # Update session with latest company info
+    session["company_id"] = company_id
+    session["user_name"] = user_name
     
     # Add user message
     session["messages"].append(HumanMessage(content=req.message))
     
     # Prepare state for graph
-    # Note: The graph expects 'messages' in the state
     current_state = {
         "messages": session["messages"],
-        "user_id": session["user_id"],
-        "user_name": session["user_name"]
+        "user_id": user_id,
+        "user_name": user_name,
+        "company_id": company_id
     }
     
     try:
-        # Invoke graph
-        result = graph_app.invoke(current_state)
+        # Invoke graph asynchronously to avoid blocking the event loop
+        # This allows tools to schedule coroutines back to the main loop
+        result = await graph_app.ainvoke(current_state)
         
-        # Update session history with result
-        # The result['messages'] contains the full history including new response
+        # Update session with result
         session["messages"] = result["messages"]
         
-        # Get the last message (Bot response)
+        # Get the last AI message
         last_msg = session["messages"][-1]
+        response_content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
         
-        return {
-            "response": last_msg.content,
-            "history": [
-                {"role": "user" if isinstance(m, HumanMessage) else "bot", "content": m.content}
-                for m in session["messages"]
-                if isinstance(m, (HumanMessage, AIMessage))
-            ]
-        }
+        # Build history for frontend
+        history = [
+            {
+                "role": "user" if isinstance(m, HumanMessage) else "bot",
+                "content": m.content if hasattr(m, 'content') else str(m)
+            }
+            for m in session["messages"]
+            if isinstance(m, (HumanMessage, AIMessage))
+        ]
+        
+        return ChatResponse(response=response_content, history=history)
+        
     except Exception as e:
         print(f"Error processing chat: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
 
-@api_app.post("/reset_chat")
-def reset_chat(req: ResetChatRequest):
-    """Clear the in-memory chat history for a given user."""
-    # Verify and decode JWT token
-    payload = decode_access_token(req.token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+@api_app.post("/reset_chat", response_model=ResetResponse)
+async def reset_chat(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Clear the chat history for the current user."""
+    user_id = current_user["user_id"]
+    user_name = current_user["user_name"]
+    company_id = current_user["company_id"]
     
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-    
-    if user_id in sessions:
-        user_name = sessions[user_id].get("user_name", "User")
-        email = sessions[user_id].get("email", "")
-        sessions[user_id] = {
-            "messages": [],
-            "user_id": user_id,
-            "user_name": user_name,
-            "email": email
-        }
-        return {"status": "success"}
-    # If session doesn't exist, treat as success so UI stays simple
-    return {"status": "success"}
-
-@api_app.post("/verify_token")
-def verify_token(req: VerifyTokenRequest):
-    """Verify if a token is valid and return user data."""
-    # Verify and decode JWT token
-    payload = decode_access_token(req.token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-    
-    return {
-        "user_id": user_id,
-        "user_name": payload.get("user_name"),
-        "email": payload.get("email"),
-        "status": "success"
+    # Reset or initialize session
+    sessions[user_id] = {
+        "messages": [],
+        "user_name": user_name,
+        "company_id": company_id
     }
-
-
-@api_app.post("/logout")
-def logout(req: VerifyTokenRequest):
-    """Logout endpoint. JWT tokens are stateless, so this just validates the token."""
-    # Verify token is valid (optional validation)
-    payload = decode_access_token(req.token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
     
-    # With JWT, logout is handled client-side by removing the token
-    # No server-side state to clear
-    return {"status": "success"}
+    return ResetResponse(
+        status="success",
+        message=f"Chat history cleared for {user_name}"
+    )
+
+
+@api_app.get("/chat/history")
+async def get_chat_history(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get the current chat history for the user."""
+    user_id = current_user["user_id"]
+    
+    if user_id not in sessions:
+        return {"history": []}
+    
+    session = sessions[user_id]
+    history = [
+        {
+            "role": "user" if isinstance(m, HumanMessage) else "bot",
+            "content": m.content if hasattr(m, 'content') else str(m),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        for m in session["messages"]
+        if isinstance(m, (HumanMessage, AIMessage))
+    ]
+    
+    return {"history": history}
 
 
 @api_app.get("/health")
-def health():
-    return {"status": "ok"}
+async def health():
+    """Health check endpoint."""
+    return {
+        "status": "ok",
+        "service": "dash-saas-chatbot",
+        "version": "2.0.0",
+        "database": "dash_saas"
+    }
+
+
+@api_app.get("/me")
+async def get_me(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get current user info (for testing auth)."""
+    return current_user
+
 
 if __name__ == "__main__":
     # Run the FastAPI application
-    uvicorn.run(api_app, host="0.0.0.0", port=8080)
+    uvicorn.run(api_app, host="0.0.0.0", port=8080, reload=True)
