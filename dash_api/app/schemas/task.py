@@ -20,6 +20,13 @@ class TaskPriority(str, Enum):
     HIGH = "High"
 
 
+class CollaboratorInfo(BaseModel):
+    """Collaborator info schema."""
+    user_id: str
+    user_name: str
+    user_avatar: Optional[str] = None
+
+
 class TaskBase(BaseModel):
     """Base task schema."""
     title: str = Field(..., min_length=1, max_length=200)
@@ -32,6 +39,7 @@ class TaskBase(BaseModel):
 class TaskCreate(TaskBase):
     """Task creation schema."""
     assignee_id: str
+    collaborator_ids: List[str] = Field(default_factory=list)  # List of user IDs to add as collaborators
     status: TaskStatus = Field(default=TaskStatus.TODO)
     
     class Config:
@@ -56,6 +64,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[TaskPriority] = None
     due_date: Optional[date] = None
     assignee_id: Optional[str] = None
+    collaborator_ids: Optional[List[str]] = None  # List of user IDs - replaces all collaborators
     project_id: Optional[str] = None
 
 
@@ -76,6 +85,7 @@ class TaskResponse(TaskBase):
     assignee_id: str
     assignee_name: str
     assignee_avatar: Optional[str]
+    collaborators: List[CollaboratorInfo] = Field(default_factory=list)  # List of collaborators with full info
     creator_id: str
     project_name: Optional[str]
     company_id: Optional[str] = None

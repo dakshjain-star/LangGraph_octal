@@ -25,8 +25,9 @@ class CommentController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.get_effective_company_id():
+        # Check company access - user can access if they belong to the task's company
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"
@@ -61,8 +62,9 @@ class CommentController:
                 detail="Task not found"
             )
         
-        # Check company access
-        if task.company_id != current_user.get_effective_company_id():
+        # Check company access - user can comment if they belong to the task's company
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"

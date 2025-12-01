@@ -37,11 +37,12 @@ class MongoDB:
             from app.models.task import Task
             from app.models.comment import Comment
             from app.models.invitation import Invitation
+            from app.models.task_history import TaskHistory
             
             # Initialize Beanie with document models
             await init_beanie(
                 database=database,
-                document_models=[User, Company, Project, Task, Comment, Invitation]
+                document_models=[User, Company, Project, Task, Comment, Invitation, TaskHistory]
             )
             
             logger.info("Successfully connected to MongoDB and initialized Beanie")
@@ -68,6 +69,7 @@ class MongoDB:
             from app.models.project import Project
             from app.models.task import Task
             from app.models.comment import Comment
+            from app.models.task_history import TaskHistory
             
             # User indexes
             await User.find_one().motor.create_index("email", unique=True)
@@ -91,6 +93,11 @@ class MongoDB:
             # Comment indexes
             await Comment.find_one().motor.create_index("task_id")
             await Comment.find_one().motor.create_index("user_id")
+            
+            # TaskHistory indexes
+            await TaskHistory.find_one().motor.create_index("task_id")
+            await TaskHistory.find_one().motor.create_index("company_id")
+            await TaskHistory.find_one().motor.create_index("created_at")
             
             logger.info("Database indexes created successfully")
             

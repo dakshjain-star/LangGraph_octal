@@ -173,6 +173,9 @@ class WebSocketEventType:
     COMMENT_ADDED = "COMMENT_ADDED"
     COMMENT_DELETED = "COMMENT_DELETED"
     
+    # Task History events
+    TASK_HISTORY_UPDATED = "TASK_HISTORY_UPDATED"
+    
     # Invitation events
     INVITATION_RECEIVED = "INVITATION_RECEIVED"
     INVITATION_RESPONSE = "INVITATION_RESPONSE"
@@ -234,6 +237,20 @@ async def notify_task_deleted(task_id: str, company_id: str, deleter_id: str = N
             "payload": {"task_id": task_id}
         },
         exclude_user=deleter_id
+    )
+
+
+async def notify_task_history_updated(task_id: str, history_data: dict, company_id: str):
+    """Notify relevant users when task history is updated."""
+    await manager.broadcast_to_company(
+        company_id,
+        {
+            "type": WebSocketEventType.TASK_HISTORY_UPDATED,
+            "payload": {
+                "task_id": task_id,
+                "history_entry": history_data
+            }
+        }
     )
 
 

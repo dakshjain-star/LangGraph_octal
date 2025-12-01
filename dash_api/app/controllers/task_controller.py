@@ -1,22 +1,41 @@
 """Task controller with business logic."""
 from fastapi import HTTPException, status
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import re
-from datetime import datetime, timedelta, date as date_type
+from datetime import datetime, timedelta, date as date_type, timezone
 
-from app.models.task import Task, TaskStatus, TaskPriority
+from app.models.task import Task, TaskStatus, TaskPriority, Collaborator
+from app.models.task_history import TaskHistory, HistoryActionType
 from app.models.user import User, UserRole
 from app.models.project import Project
 from app.models.comment import Comment
 from app.models.company import Company
 from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskStatusUpdate, TaskAssigneeUpdate,
-    TaskResponse, TaskFilter
+    TaskResponse, TaskFilter, CollaboratorInfo
 )
+from app.schemas.task_history import TaskHistoryResponse
 from app.services.websocket import (
     notify_task_created, notify_task_updated, 
-    notify_task_assigned, notify_task_deleted
+    notify_task_assigned, notify_task_deleted,
+    notify_task_history_updated
 )
+
+
+# IST timezone offset (UTC+5:30)
+IST_OFFSET = timezone(timedelta(hours=5, minutes=30))
+
+
+def convert_to_ist(dt: datetime) -> str:
+    """Convert UTC datetime to IST formatted string."""
+    if dt is None:
+        return ""
+    # Ensure datetime is UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    # Convert to IST
+    ist_dt = dt.astimezone(IST_OFFSET)
+    return ist_dt.strftime("%d %b %Y, %I:%M %p IST")
 
 
 def is_task_overdue(due_date, task_status) -> bool:
@@ -28,6 +47,225 @@ def is_task_overdue(due_date, task_status) -> bool:
     if isinstance(due_date, datetime):
         due_date = due_date.date()
     return due_date < today
+
+
+def build_collaborator_info_list(collaborators: List[Collaborator]) -> List[CollaboratorInfo]:
+    """Convert list of Collaborator models to CollaboratorInfo schemas."""
+    return [
+        CollaboratorInfo(
+            user_id=c.user_id,
+            user_name=c.user_name,
+            user_avatar=c.user_avatar
+        )
+        for c in (collaborators or [])
+    ]
+
+
+async def create_task_history(
+    task_id: str,
+    action: HistoryActionType,
+    user: User,
+    company_id: Optional[str] = None,
+    field_name: Optional[str] = None,
+    old_value: Any = None,
+    new_value: Any = None
+) -> TaskHistory:
+    """Create a task history entry."""
+    history = TaskHistory(
+        task_id=task_id,
+        action=action,
+        field_name=field_name,
+        old_value=old_value,
+        new_value=new_value,
+        user_id=str(user.id),
+        user_name=user.name,
+        user_avatar=user.avatar_url,
+        company_id=company_id
+    )
+    await history.insert()
+    
+    # Send WebSocket notification for history update
+    if company_id:
+        history_data = {
+            "id": str(history.id),
+            "task_id": str(history.task_id),
+            "action": history.action,
+            "field_name": history.field_name,
+            "old_value": history.old_value,
+            "new_value": history.new_value,
+            "user_name": history.user_name,
+            "user_avatar": history.user_avatar,
+            "created_at": convert_to_ist(history.created_at)
+        }
+        await notify_task_history_updated(task_id, history_data, company_id)
+    
+    return history
+
+
+async def log_task_changes(
+    task_id: str,
+    old_task: Dict,
+    new_data: Dict,
+    user: User,
+    company_id: Optional[str] = None
+) -> List[TaskHistory]:
+    """Log all changes made to a task."""
+    history_entries = []
+    
+    # Field mapping for better action types
+    field_action_map = {
+        "status": HistoryActionType.STATUS_CHANGED,
+        "priority": HistoryActionType.PRIORITY_CHANGED,
+        "assignee_id": HistoryActionType.ASSIGNEE_CHANGED,
+        "due_date": HistoryActionType.DUE_DATE_CHANGED,
+        "project_id": HistoryActionType.PROJECT_CHANGED,
+        "title": HistoryActionType.TITLE_CHANGED,
+        "description": HistoryActionType.DESCRIPTION_CHANGED,
+        "collaborator_ids": HistoryActionType.COLLABORATORS_CHANGED,
+    }
+    
+    for field, new_value in new_data.items():
+        if field in old_task:
+            old_value = old_task.get(field)
+            
+            # Normalize values for comparison
+            old_compare = old_value
+            new_compare = new_value
+            
+            # Handle special comparisons
+            if field == "due_date":
+                # Normalize datetime to date strings for comparison
+                if old_compare and hasattr(old_compare, 'date'):
+                    old_compare = old_compare.date().isoformat()
+                elif old_compare and hasattr(old_compare, 'isoformat'):
+                    old_compare = old_compare.isoformat()[:10]
+                elif old_compare and isinstance(old_compare, str):
+                    old_compare = old_compare[:10]
+                    
+                if new_compare and hasattr(new_compare, 'date'):
+                    new_compare = new_compare.date().isoformat()
+                elif new_compare and hasattr(new_compare, 'isoformat'):
+                    new_compare = new_compare.isoformat()[:10]
+                elif new_compare and isinstance(new_compare, str):
+                    new_compare = new_compare[:10]
+            
+            elif field == "collaborator_ids":
+                # Normalize lists for comparison - sort them to ignore order
+                old_compare = sorted(old_value) if old_value else []
+                new_compare = sorted(new_value) if new_value else []
+            
+            # Skip if values are the same
+            if old_compare == new_compare:
+                continue  # Skip unchanged fields
+            
+            action = field_action_map.get(field, HistoryActionType.UPDATED)
+            
+            # Make human-readable values for certain fields
+            display_old = old_value
+            display_new = new_value
+            
+            if field == "assignee_id":
+                display_old = old_task.get("assignee_name", old_value)
+                # Get new assignee name
+                if new_value:
+                    new_assignee = await User.get(new_value)
+                    display_new = new_assignee.name if new_assignee else new_value
+            
+            if field == "project_id":
+                display_old = old_task.get("project_name") or "None"
+                if new_value:
+                    new_project = await Project.get(new_value)
+                    display_new = new_project.name if new_project else "None"
+                else:
+                    display_new = "None"
+            
+            if field == "due_date":
+                if old_value:
+                    if hasattr(old_value, 'date'):
+                        display_old = old_value.date().isoformat()
+                    elif hasattr(old_value, 'isoformat'):
+                        display_old = old_value.isoformat()[:10]
+                    elif isinstance(old_value, str):
+                        display_old = old_value[:10]
+                    else:
+                        display_old = str(old_value)[:10]
+                else:
+                    display_old = "None"
+                if new_value:
+                    if hasattr(new_value, 'date'):
+                        display_new = new_value.date().isoformat()
+                    elif hasattr(new_value, 'isoformat'):
+                        display_new = new_value.isoformat()[:10]
+                    elif isinstance(new_value, str):
+                        display_new = new_value[:10]
+                    else:
+                        display_new = str(new_value)[:10]
+                else:
+                    display_new = "None"
+            
+            if field == "collaborator_ids":
+                # Get collaborator names from old_task data
+                old_names = old_task.get("collaborator_names", [])
+                display_old = ", ".join(old_names) if old_names else "None"
+                
+                # Get new collaborator names by looking up users
+                if new_value:
+                    new_names = []
+                    for user_id in new_value:
+                        user = await User.get(user_id)
+                        if user:
+                            new_names.append(user.name)
+                    display_new = ", ".join(new_names) if new_names else "None"
+                else:
+                    display_new = "None"
+            
+            history = await create_task_history(
+                task_id=task_id,
+                action=action,
+                user=user,
+                company_id=company_id,
+                field_name=field,
+                old_value=display_old,
+                new_value=display_new
+            )
+            history_entries.append(history)
+    
+    return history_entries
+
+
+async def build_collaborators_from_ids(collaborator_ids: List[str], company_id: str, assignee_id: Optional[str] = None) -> List[Collaborator]:
+    """Build list of Collaborator objects from user IDs, validating they're from the same company.
+    
+    Args:
+        collaborator_ids: List of user IDs to add as collaborators
+        company_id: Company ID to validate users belong to
+        assignee_id: Optional assignee ID to exclude from collaborators (assignee cannot be a collaborator)
+    """
+    collaborators = []
+    for user_id in collaborator_ids:
+        # Skip if this user is the assignee
+        if assignee_id and user_id == assignee_id:
+            continue
+            
+        user = await User.get(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Collaborator user {user_id} not found"
+            )
+        # Verify user belongs to the same company
+        user_company_ids = user.get_effective_company_ids()
+        if company_id not in user_company_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Collaborator {user.name} does not belong to the same company"
+            )
+        collaborators.append(Collaborator(
+            user_id=str(user.id),
+            user_name=user.name,
+            user_avatar=user.avatar_url
+        ))
+    return collaborators
 
 
 class TaskController:
@@ -164,6 +402,7 @@ class TaskController:
                     assignee_id=task.assignee_id,
                     assignee_name=task.assignee_name,
                     assignee_avatar=task.assignee_avatar,
+                    collaborators=build_collaborator_info_list(task.collaborators),
                     creator_id=task.creator_id,
                     project_id=task.project_id,
                     project_name=task.project_name,
@@ -230,6 +469,7 @@ class TaskController:
             assignee_id=task.assignee_id,
             assignee_name=task.assignee_name,
             assignee_avatar=task.assignee_avatar,
+            collaborators=build_collaborator_info_list(task.collaborators),
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
@@ -281,6 +521,11 @@ class TaskController:
             if company:
                 company_name = company.name
         
+        # Build collaborators list from IDs (excluding assignee)
+        collaborators = []
+        if data.collaborator_ids:
+            collaborators = await build_collaborators_from_ids(data.collaborator_ids, company_id, data.assignee_id)
+        
         # Create task
         task = Task(
             title=data.title,
@@ -291,6 +536,7 @@ class TaskController:
             assignee_id=data.assignee_id,
             assignee_name=assignee.name,
             assignee_avatar=assignee.avatar_url,
+            collaborators=collaborators,
             creator_id=str(current_user.id),
             company_id=company_id,
             company_name=company_name,
@@ -300,7 +546,18 @@ class TaskController:
         
         await task.insert()
         
-        return TaskResponse(
+        # Log task creation in history
+        await create_task_history(
+            task_id=str(task.id),
+            action=HistoryActionType.CREATED,
+            user=current_user,
+            company_id=company_id,
+            field_name=None,
+            old_value=None,
+            new_value=task.title
+        )
+        
+        task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
             description=task.description,
@@ -310,6 +567,7 @@ class TaskController:
             assignee_id=task.assignee_id,
             assignee_name=task.assignee_name,
             assignee_avatar=task.assignee_avatar,
+            collaborators=build_collaborator_info_list(task.collaborators),
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
@@ -349,6 +607,21 @@ class TaskController:
                 detail="Task not found"
             )
         
+        # Store old values for history tracking
+        old_task_data = {
+            "title": task.title,
+            "description": task.description,
+            "status": task.status.value if task.status else None,
+            "priority": task.priority.value if task.priority else None,
+            "due_date": task.due_date,
+            "assignee_id": task.assignee_id,
+            "assignee_name": task.assignee_name,
+            "project_id": task.project_id,
+            "project_name": task.project_name,
+            "collaborator_ids": [c.user_id for c in (task.collaborators or [])],
+            "collaborator_names": [c.user_name for c in (task.collaborators or [])],
+        }
+        
         # Store original assignee for notification tracking
         original_assignee_id = task.assignee_id
         
@@ -384,6 +657,10 @@ class TaskController:
             task.assignee_name = assignee.name
             task.assignee_avatar = assignee.avatar_url
             update_data.pop("assignee_id")
+            
+            # Remove new assignee from collaborators if they're in the list
+            if task.collaborators:
+                task.collaborators = [c for c in task.collaborators if c.user_id != task.assignee_id]
         
         # If project_id is being changed, update project_name too
         if "project_id" in update_data:
@@ -401,6 +678,14 @@ class TaskController:
                 task.project_name = None
             update_data.pop("project_id")
         
+        # If collaborator_ids is being changed, rebuild the collaborators list
+        if "collaborator_ids" in update_data:
+            collaborator_ids = update_data.pop("collaborator_ids")
+            if collaborator_ids is not None:
+                # Use the updated assignee_id if it's being changed, otherwise use existing
+                current_assignee_id = task.assignee_id
+                task.collaborators = await build_collaborators_from_ids(collaborator_ids, task.company_id, current_assignee_id)
+        
         # Convert date to datetime for Beanie compatibility
         if "due_date" in update_data and update_data["due_date"]:
             if isinstance(update_data["due_date"], date_type) and not isinstance(update_data["due_date"], datetime):
@@ -411,6 +696,22 @@ class TaskController:
         
         task.updated_at = datetime.utcnow()
         await task.save()
+        
+        # Log changes to history
+        new_task_data = data.model_dump(exclude_unset=True)
+        # Convert enum values to strings for comparison
+        if "status" in new_task_data and new_task_data["status"]:
+            new_task_data["status"] = new_task_data["status"].value if hasattr(new_task_data["status"], 'value') else new_task_data["status"]
+        if "priority" in new_task_data and new_task_data["priority"]:
+            new_task_data["priority"] = new_task_data["priority"].value if hasattr(new_task_data["priority"], 'value') else new_task_data["priority"]
+        
+        await log_task_changes(
+            task_id=str(task.id),
+            old_task=old_task_data,
+            new_data=new_task_data,
+            user=current_user,
+            company_id=task.company_id
+        )
         
         # Track if assignee changed for notification
         assignee_changed = "assignee_id" in data.model_dump(exclude_unset=True)
@@ -426,6 +727,7 @@ class TaskController:
             assignee_id=task.assignee_id,
             assignee_name=task.assignee_name,
             assignee_avatar=task.assignee_avatar,
+            collaborators=build_collaborator_info_list(task.collaborators),
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
@@ -465,6 +767,9 @@ class TaskController:
                 detail="Task not found"
             )
         
+        # Store old status for history
+        old_status = task.status.value if task.status else None
+        
         # Check company access - allow access from any of user's companies
         user_company_ids = current_user.get_effective_company_ids()
         if task.company_id not in user_company_ids:
@@ -483,9 +788,22 @@ class TaskController:
             )
         
         # Update status
-        task.status = data.status
+        new_status = data.status
+        task.status = new_status
         task.updated_at = datetime.utcnow()
         await task.save()
+        
+        # Log status change to history
+        if old_status != new_status.value:
+            await create_task_history(
+                task_id=str(task.id),
+                action=HistoryActionType.STATUS_CHANGED,
+                user=current_user,
+                company_id=task.company_id,
+                field_name="status",
+                old_value=old_status,
+                new_value=new_status.value
+            )
         
         return TaskResponse(
             id=str(task.id),
@@ -497,6 +815,7 @@ class TaskController:
             assignee_id=task.assignee_id,
             assignee_name=task.assignee_name,
             assignee_avatar=task.assignee_avatar,
+            collaborators=build_collaborator_info_list(task.collaborators),
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
@@ -517,6 +836,9 @@ class TaskController:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
             )
+        
+        # Store old assignee for history
+        old_assignee_name = task.assignee_name
         
         # Check company access - allow access from any of user's companies
         user_company_ids = current_user.get_effective_company_ids()
@@ -548,6 +870,18 @@ class TaskController:
         task.updated_at = datetime.utcnow()
         await task.save()
         
+        # Log assignee change to history
+        if old_assignee_name != assignee.name:
+            await create_task_history(
+                task_id=str(task.id),
+                action=HistoryActionType.ASSIGNEE_CHANGED,
+                user=current_user,
+                company_id=task.company_id,
+                field_name="assignee",
+                old_value=old_assignee_name,
+                new_value=assignee.name
+            )
+        
         return TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -558,6 +892,7 @@ class TaskController:
             assignee_id=task.assignee_id,
             assignee_name=task.assignee_name,
             assignee_avatar=task.assignee_avatar,
+            collaborators=build_collaborator_info_list(task.collaborators),
             creator_id=task.creator_id,
             project_id=task.project_id,
             project_name=task.project_name,
@@ -672,6 +1007,7 @@ class TaskController:
                     assignee_id=task.assignee_id,
                     assignee_name=task.assignee_name,
                     assignee_avatar=task.assignee_avatar,
+                    collaborators=build_collaborator_info_list(task.collaborators),
                     creator_id=task.creator_id,
                     project_id=task.project_id,
                     project_name=task.project_name,
@@ -740,6 +1076,7 @@ class TaskController:
                     assignee_id=task.assignee_id,
                     assignee_name=task.assignee_name,
                     assignee_avatar=task.assignee_avatar,
+                    collaborators=build_collaborator_info_list(task.collaborators),
                     creator_id=task.creator_id,
                     project_id=task.project_id,
                     project_name=task.project_name,
@@ -823,4 +1160,56 @@ class TaskController:
             "high_priority_tasks": stats.get("high_priority", [{}])[0].get("count", 0) if stats.get("high_priority") else 0,
             "tasks_in_progress": stats.get("in_progress", [{}])[0].get("count", 0) if stats.get("in_progress") else 0,
             "overdue_tasks": overdue_count
+        }
+    
+    @staticmethod
+    async def get_task_history(task_id: str, current_user: User, skip: int = 0, limit: int = 50) -> Dict:
+        """Get history for a specific task."""
+        # Check if task exists
+        task = await Task.get(task_id)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+        
+        # Check company access - allow access from any of user's companies
+        user_company_ids = current_user.get_effective_company_ids()
+        if task.company_id not in user_company_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this task's history"
+            )
+        
+        # Get total count
+        total = await TaskHistory.find(TaskHistory.task_id == task_id).count()
+        
+        # Get history entries sorted by created_at descending (most recent first)
+        history_entries = await TaskHistory.find(
+            TaskHistory.task_id == task_id
+        ).sort([("created_at", -1)]).skip(skip).limit(limit).to_list()
+        
+        # Convert to response format with IST timestamps
+        history_responses = []
+        for entry in history_entries:
+            history_responses.append(
+                TaskHistoryResponse(
+                    id=str(entry.id),
+                    task_id=entry.task_id,
+                    action=entry.action,
+                    field_name=entry.field_name,
+                    old_value=entry.old_value,
+                    new_value=entry.new_value,
+                    user_id=entry.user_id,
+                    user_name=entry.user_name,
+                    user_avatar=entry.user_avatar,
+                    company_id=entry.company_id,
+                    created_at=entry.created_at,
+                    created_at_ist=convert_to_ist(entry.created_at)
+                )
+            )
+        
+        return {
+            "history": [h.model_dump() for h in history_responses],
+            "total": total
         }

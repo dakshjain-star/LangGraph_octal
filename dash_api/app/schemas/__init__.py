@@ -33,6 +33,10 @@ from .invitation import (
     InvitationResponse, InvitationActionRequest,
     InvitationStatus
 )
+from .task_history import (
+    TaskHistoryResponse, TaskHistoryListResponse,
+    HistoryActionType
+)
 
 __all__ = [
     # Auth
@@ -67,5 +71,9 @@ __all__ = [
     
     # Invitation
     "InvitationResponse", "InvitationActionRequest",
-    "InvitationStatus"
+    "InvitationStatus",
+    
+    # Task History
+    "TaskHistoryResponse", "TaskHistoryListResponse",
+    "HistoryActionType"
 ]
