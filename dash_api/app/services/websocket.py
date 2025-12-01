@@ -175,6 +175,7 @@ class WebSocketEventType:
     
     # Task History events
     TASK_HISTORY_UPDATED = "TASK_HISTORY_UPDATED"
+    TASK_COLLABORATORS_UPDATED = "TASK_COLLABORATORS_UPDATED"
     
     # Invitation events
     INVITATION_RECEIVED = "INVITATION_RECEIVED"
@@ -251,6 +252,21 @@ async def notify_task_history_updated(task_id: str, history_data: dict, company_
                 "history_entry": history_data
             }
         }
+    )
+
+
+async def notify_task_collaborators_updated(task_id: str, collaborators_data: dict, company_id: str, updater_id: str = None):
+    """Notify relevant users when task collaborators are updated."""
+    await manager.broadcast_to_company(
+        company_id,
+        {
+            "type": WebSocketEventType.TASK_COLLABORATORS_UPDATED,
+            "payload": {
+                "task_id": task_id,
+                "collaborators": collaborators_data
+            }
+        },
+        exclude_user=updater_id
     )
 
 

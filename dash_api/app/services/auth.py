@@ -87,12 +87,19 @@ class AuthService:
             )
             
             # Check token type
-            if payload.get("type") != token_type:
+            token_type_in_payload = payload.get("type")
+            if token_type_in_payload != token_type:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Token type mismatch: expected '{token_type}', got '{token_type_in_payload}'")
                 return None
             
             return payload
             
-        except JWTError:
+        except JWTError as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"JWT verification failed: {str(e)}")
             return None
     
     @staticmethod

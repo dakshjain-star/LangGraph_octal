@@ -18,7 +18,7 @@ from app.schemas.task_history import TaskHistoryResponse
 from app.services.websocket import (
     notify_task_created, notify_task_updated, 
     notify_task_assigned, notify_task_deleted,
-    notify_task_history_updated
+    notify_task_history_updated, notify_task_collaborators_updated
 )
 
 
@@ -753,6 +753,21 @@ class TaskController:
         # If assignee changed, notify new assignee
         if assignee_changed and task.assignee_id != str(current_user.id):
             await notify_task_assigned(task_data, task.assignee_id, str(current_user.id))
+        
+        # If collaborators changed, notify about the update
+        if "collaborator_ids" in data.model_dump(exclude_unset=True):
+            collaborators_info = {
+                "task_id": str(task.id),
+                "collaborators": [
+                    {
+                        "user_id": c.user_id,
+                        "user_name": c.user_name,
+                        "user_avatar": c.user_avatar
+                    }
+                    for c in (task.collaborators or [])
+                ]
+            }
+            await notify_task_collaborators_updated(str(task.id), collaborators_info, task.company_id, str(current_user.id))
         
         return task_response
     

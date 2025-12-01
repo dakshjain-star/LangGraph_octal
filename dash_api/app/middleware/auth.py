@@ -2,12 +2,15 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
+import logging
 
 from app.models.user import User, UserRole
 from app.services.auth import verify_token
 
-# HTTP Bearer token security scheme
-security = HTTPBearer()
+logger = logging.getLogger(__name__)
+
+# HTTP Bearer token security scheme with auto_error=False to handle missing tokens gracefully
+security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
@@ -19,11 +22,21 @@ async def get_current_user(
     Raises:
         HTTPException: If token is invalid or user not found.
     """
+    # Check if credentials were provided
+    if not credentials:
+        logger.warning("No credentials provided in request")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     token = credentials.credentials
     
     # Verify token
     payload = verify_token(token, token_type="access")
     if not payload:
+        logger.warning(f"Token verification failed for token: {token[:20]}...")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -33,6 +46,7 @@ async def get_current_user(
     # Get user ID from token
     user_id: str = payload.get("sub")
     if not user_id:
+        logger.warning("No user ID in token payload")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload",
@@ -42,6 +56,7 @@ async def get_current_user(
     # Get user from database
     user = await User.get(user_id)
     if not user:
+        logger.warning(f"User not found for user_id: {user_id}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",

@@ -14,6 +14,9 @@ fastapi
 uvicorn
 python-multipart
 
+# WebSocket Client (for real-time updates)
+websockets
+
 # Authentication (same as dash_api)
 python-jose[cryptography]
 passlib[bcrypt]

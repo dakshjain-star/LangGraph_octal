@@ -1,6 +1,7 @@
 """
 LangGraph Task Management Chatbot - Integrated with dash_saas.
 Uses the same JWT authentication and database as the main dashboard API.
+Includes real-time WebSocket updates for task history, comments, and collaborators.
 """
 import asyncio
 import os
@@ -18,6 +19,7 @@ from langgraph.prebuilt import ToolNode
 
 import warnings
 from datetime import datetime
+import logging
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Depends
@@ -38,11 +40,18 @@ from model import connect_db, close_db
 # Import tools
 from tools import tools, set_main_loop
 
+# Import WebSocket client
+from websocket_client import get_or_create_ws_handler, get_ws_handler, close_ws_handler
+
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_core")
 warnings.filterwarnings("ignore", message=".*Pydantic V1.*")
 
 # Security
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 # --- State Definition ---
@@ -254,8 +263,12 @@ api_app.add_middleware(
 )
 
 # In-memory session store
-# Format: {user_id: {"messages": [], "user_name": str, "company_id": str}}
+# Format: {user_id: {"messages": [], "user_name": str, "company_id": str, "jwt_token": str}}
 sessions: Dict[str, Dict[str, Any]] = {}
+
+# In-memory store for real-time updates
+# Format: {user_id: {"task_updates": [], "comment_updates": [], "history_updates": []}}
+real_time_updates: Dict[str, Dict[str, list]] = {}
 
 
 # --- Pydantic Models ---
@@ -289,11 +302,21 @@ async def get_current_user(
     Validate JWT token using dash_api's authentication.
     Returns user info extracted from the token.
     """
+    # Check if credentials were provided
+    if not credentials:
+        logger.warning("No credentials provided in request")
+        raise HTTPException(
+            status_code=401,
+            detail="Missing authorization credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     token = credentials.credentials
     
     # Use dash_api's token verification
     payload = dash_verify_token(token, token_type="access")
     if not payload:
+        logger.warning(f"Token verification failed")
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token",
@@ -333,15 +356,18 @@ async def get_current_user(
 @api_app.post("/chat", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Process a chat message and return the AI response.
     Uses the same JWT authentication as the main Dash SaaS API.
+    Enables real-time updates via WebSocket.
     """
     user_id = current_user["user_id"]
     user_name = current_user["user_name"]
     company_id = current_user["company_id"]
+    jwt_token = credentials.credentials
     
     if not company_id:
         raise HTTPException(
@@ -354,14 +380,23 @@ async def chat(
         sessions[user_id] = {
             "messages": [],
             "user_name": user_name,
-            "company_id": company_id
+            "company_id": company_id,
+            "jwt_token": jwt_token
         }
+        
+        # Initialize WebSocket connection for real-time updates
+        try:
+            await _init_websocket_handlers(current_user, credentials)
+            logger.info(f"Initialized WebSocket connection for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize WebSocket for user {user_id}: {e}")
     
     session = sessions[user_id]
     
-    # Update session with latest company info
+    # Update session with latest company info and token
     session["company_id"] = company_id
     session["user_name"] = user_name
+    session["jwt_token"] = jwt_token
     
     # Check if this is a data-related query that needs fresh data reminder
     data_keywords = ['task', 'tasks', 'project', 'projects', 'user', 'users', 'assignee', 
@@ -375,6 +410,18 @@ async def chat(
     
     # Add user message
     session["messages"].append(HumanMessage(content=req.message))
+    
+    # Check for recent real-time updates to add context
+    user_updates = real_time_updates.get(user_id, {})
+    update_context = ""
+    if user_updates.get("history_updates") or user_updates.get("comment_updates") or user_updates.get("task_updates"):
+        update_context = "\n\n[Real-time Updates Received]"
+        if user_updates.get("history_updates"):
+            update_context += f"\n- {len(user_updates.get('history_updates', []))} task history update(s)"
+        if user_updates.get("comment_updates"):
+            update_context += f"\n- {len(user_updates.get('comment_updates', []))} comment update(s)"
+        if user_updates.get("task_updates"):
+            update_context += f"\n- {len(user_updates.get('task_updates', []))} task update(s)"
     
     # Prepare state for graph
     current_state = {
@@ -424,11 +471,21 @@ async def reset_chat(
     user_name = current_user["user_name"]
     company_id = current_user["company_id"]
     
+    # Close WebSocket connection
+    close_ws_handler(user_id)
+    
     # Reset or initialize session
     sessions[user_id] = {
         "messages": [],
         "user_name": user_name,
         "company_id": company_id
+    }
+    
+    # Clear real-time updates
+    real_time_updates[user_id] = {
+        "task_updates": [],
+        "comment_updates": [],
+        "history_updates": []
     }
     
     return ResetResponse(
@@ -500,6 +557,221 @@ I'm now aware of these updates. When you ask about tasks, I'll fetch the latest 
     return {
         "status": "success",
         "message": f"Notified chatbot about {len(notification.changes)} change(s)"
+    }
+
+
+# ============================================================================
+# Real-Time WebSocket Update Handlers
+# ============================================================================
+
+async def _init_websocket_handlers(current_user: Dict[str, Any], credentials: HTTPAuthorizationCredentials):
+    """Initialize WebSocket connection for real-time updates."""
+    user_id = current_user["user_id"]
+    company_id = current_user["company_id"]
+    jwt_token = credentials.credentials
+    
+    # Get or create WebSocket handler
+    ws_handler = await get_or_create_ws_handler(
+        jwt_token=jwt_token,
+        user_id=user_id,
+        company_id=company_id,
+        api_url="http://localhost:8000"  # Adjust to your API URL
+    )
+    
+    # Wait briefly for connection to establish
+    connected = await ws_handler.wait_for_connection(timeout=5)
+    if not connected:
+        logger.warning(f"WebSocket not connected for user {user_id} after 5 seconds, handlers may not work initially")
+    else:
+        logger.info(f"WebSocket connected for user {user_id}")
+    
+    # Register handlers for real-time events (register_handler is NOT async)
+    ws_handler.register_handler("TASK_HISTORY_UPDATED", 
+        lambda data: _handle_task_history_update(user_id, data))
+    ws_handler.register_handler("COMMENT_ADDED", 
+        lambda data: _handle_comment_added(user_id, data))
+    ws_handler.register_handler("COMMENT_DELETED", 
+        lambda data: _handle_comment_deleted(user_id, data))
+    ws_handler.register_handler("TASK_UPDATED", 
+        lambda data: _handle_task_updated(user_id, data))
+    
+    return ws_handler
+
+
+def _handle_task_history_update(user_id: str, data: Dict[str, Any]):
+    """Handle task history update event."""
+    if user_id not in real_time_updates:
+        real_time_updates[user_id] = {"task_updates": [], "comment_updates": [], "history_updates": []}
+    
+    task_id = data.get("task_id")
+    history_entry = data.get("history_entry", {})
+    
+    update_info = {
+        "type": "history",
+        "task_id": task_id,
+        "action": history_entry.get("action"),
+        "field_name": history_entry.get("field_name"),
+        "old_value": history_entry.get("old_value"),
+        "new_value": history_entry.get("new_value"),
+        "user_name": history_entry.get("user_name"),
+        "timestamp": data.get("timestamp", datetime.utcnow().isoformat())
+    }
+    
+    real_time_updates[user_id]["history_updates"].append(update_info)
+    # Keep only last 20 updates
+    real_time_updates[user_id]["history_updates"] = real_time_updates[user_id]["history_updates"][-20:]
+    
+    logger.info(f"Task history update for user {user_id}: task={task_id}, action={history_entry.get('action')}")
+
+
+def _handle_comment_added(user_id: str, data: Dict[str, Any]):
+    """Handle comment added event."""
+    if user_id not in real_time_updates:
+        real_time_updates[user_id] = {"task_updates": [], "comment_updates": [], "history_updates": []}
+    
+    task_id = data.get("task_id")
+    comment = data.get("comment", {})
+    
+    update_info = {
+        "type": "comment",
+        "task_id": task_id,
+        "content": comment.get("content"),
+        "user_name": comment.get("user_name"),
+        "created_at": comment.get("created_at"),
+        "timestamp": data.get("timestamp", datetime.utcnow().isoformat())
+    }
+    
+    real_time_updates[user_id]["comment_updates"].append(update_info)
+    # Keep only last 20 updates
+    real_time_updates[user_id]["comment_updates"] = real_time_updates[user_id]["comment_updates"][-20:]
+    
+    logger.info(f"Comment added for user {user_id}: task={task_id}, user={comment.get('user_name')}")
+
+
+def _handle_comment_deleted(user_id: str, data: Dict[str, Any]):
+    """Handle comment deleted event."""
+    if user_id not in real_time_updates:
+        real_time_updates[user_id] = {"task_updates": [], "comment_updates": [], "history_updates": []}
+    
+    task_id = data.get("task_id")
+    comment_id = data.get("comment_id")
+    
+    update_info = {
+        "type": "comment_deleted",
+        "task_id": task_id,
+        "comment_id": comment_id,
+        "timestamp": data.get("timestamp", datetime.utcnow().isoformat())
+    }
+    
+    real_time_updates[user_id]["comment_updates"].append(update_info)
+    
+    logger.info(f"Comment deleted for user {user_id}: task={task_id}, comment={comment_id}")
+
+
+def _handle_task_updated(user_id: str, data: Dict[str, Any]):
+    """Handle task updated event."""
+    if user_id not in real_time_updates:
+        real_time_updates[user_id] = {"task_updates": [], "comment_updates": [], "history_updates": []}
+    
+    task = data.get("task", {})
+    
+    update_info = {
+        "type": "task_updated",
+        "task_id": task.get("id"),
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "timestamp": data.get("timestamp", datetime.utcnow().isoformat())
+    }
+    
+    real_time_updates[user_id]["task_updates"].append(update_info)
+    # Keep only last 20 updates
+    real_time_updates[user_id]["task_updates"] = real_time_updates[user_id]["task_updates"][-20:]
+    
+    logger.info(f"Task updated for user {user_id}: task={task.get('id')}, status={task.get('status')}")
+
+
+@api_app.post("/chat/init_realtime")
+async def init_realtime_updates(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Initialize real-time WebSocket connection for the user.
+    Call this once when the chatbot starts to enable real-time updates.
+    """
+    user_id = current_user["user_id"]
+    user_name = current_user["user_name"]
+    
+    try:
+        ws_handler = await _init_websocket_handlers(current_user, credentials)
+        return {
+            "status": "success",
+            "message": f"Real-time updates initialized for {user_name}",
+            "user_id": user_id,
+            "connected": ws_handler.is_connected
+        }
+    except Exception as e:
+        logger.error(f"Error initializing real-time updates: {e}")
+        raise HTTPException(status_code=500, detail=f"Error initializing real-time updates: {str(e)}")
+
+
+@api_app.get("/chat/realtime_updates")
+async def get_realtime_updates(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get accumulated real-time updates for the user."""
+    user_id = current_user["user_id"]
+    
+    updates = real_time_updates.get(user_id, {
+        "task_updates": [],
+        "comment_updates": [],
+        "history_updates": []
+    })
+    
+    return {
+        "updates": updates,
+        "count": len(updates.get("history_updates", [])) + len(updates.get("comment_updates", [])) + len(updates.get("task_updates", []))
+    }
+
+
+@api_app.post("/chat/clear_realtime_updates")
+async def clear_realtime_updates(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Clear accumulated real-time updates for the user."""
+    user_id = current_user["user_id"]
+    
+    real_time_updates[user_id] = {
+        "task_updates": [],
+        "comment_updates": [],
+        "history_updates": []
+    }
+    
+    return {"status": "success", "message": "Real-time updates cleared"}
+
+
+@api_app.get("/chat/ws_status")
+async def get_websocket_status(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get WebSocket connection status."""
+    user_id = current_user["user_id"]
+    ws_handler = get_ws_handler(user_id)
+    
+    if not ws_handler:
+        return {
+            "user_id": user_id,
+            "connected": False,
+            "message": "No WebSocket connection initialized"
+        }
+    
+    return {
+        "user_id": user_id,
+        "connected": ws_handler.is_connected,
+        "task_histories_cached": len(ws_handler.cached_task_histories),
+        "task_comments_cached": len(ws_handler.cached_task_comments),
+        "reconnect_attempts": ws_handler.reconnect_attempts,
+        "message": "WebSocket connection active" if ws_handler.is_connected else "WebSocket connection inactive"
     }
 
 
