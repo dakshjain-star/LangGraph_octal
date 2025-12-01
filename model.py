@@ -45,11 +45,13 @@ async def connect_db():
         from dash_api.app.models.project import Project
         from dash_api.app.models.task import Task
         from dash_api.app.models.comment import Comment
+        from dash_api.app.models.task_history import TaskHistory
+        from dash_api.app.models.invitation import Invitation
         
         # Initialize Beanie with document models
         await init_beanie(
             database=database,
-            document_models=[User, Company, Project, Task, Comment]
+            document_models=[User, Company, Project, Task, Comment, TaskHistory, Invitation]
         )
         
         logger.info("Successfully connected to MongoDB and initialized Beanie")
@@ -84,6 +86,7 @@ def get_models():
     from dash_api.app.models.project import Project, ProjectStatus
     from dash_api.app.models.task import Task, TaskStatus, TaskPriority, Collaborator
     from dash_api.app.models.comment import Comment
+    from dash_api.app.models.invitation import Invitation, InvitationStatus
     
     return {
         'User': User,
@@ -96,5 +99,7 @@ def get_models():
         'TaskStatus': TaskStatus,
         'TaskPriority': TaskPriority,
         'Collaborator': Collaborator,
-        'Comment': Comment
+        'Comment': Comment,
+        'Invitation': Invitation,
+        'InvitationStatus': InvitationStatus
     }

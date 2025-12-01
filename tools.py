@@ -48,7 +48,10 @@ def run_async(coro):
             future.cancel()
             return "Error: Operation timed out. Please try again."
         except Exception as e:
-            logger.error(f"Error in run_async: {e}")
+            # Log full traceback for debugging
+            import traceback
+            logger.error(f"Error in run_async (main loop): {type(e).__name__}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Error: {str(e)}"
     
     # Fallback: try to create a new event loop for this thread
@@ -69,32 +72,73 @@ def run_async(coro):
                 new_loop.close()
                 asyncio.set_event_loop(None)
         except Exception as e:
-            logger.error(f"Error creating new event loop: {e}")
+            import traceback
+            logger.error(f"Error creating new event loop: {type(e).__name__}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Error: {str(e)}"
 
 
 # --- Async Database Operations ---
 async def _find_task_by_title_async(title_query: str, current_user_id: str, company_id: str):
-    """Find a task by title (partial match) in the company."""
+    """Find a task by title (partial match) in the company.
+    
+    Search priority:
+    1. Exact match (case-insensitive)
+    2. Title contains the query
+    3. Query contains the title
+    4. Word-based partial match
+    """
     from dash_api.app.models.task import Task
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Clean the search query
+    title_query = title_query.strip()
+    if not title_query:
+        return None
     
     # Find all tasks in the company
     tasks = await Task.find({"company_id": company_id}).to_list()
     
-    title_lower = title_query.lower().strip()
-    matching_tasks = []
+    if not tasks:
+        logger.warning(f"No tasks found for company_id: {company_id}")
+        return None
     
+    title_lower = title_query.lower()
+    
+    # First pass: exact match (case-insensitive)
     for task in tasks:
-        task_title = (task.title or "").lower()
-        # Exact match first, then partial match
+        task_title = (task.title or "").lower().strip()
         if title_lower == task_title:
-            return task  # Exact match - return immediately
+            logger.info(f"Found exact match: {task.title}")
+            return task
+    
+    # Second pass: title contains the query OR query contains the title
+    matching_tasks = []
+    for task in tasks:
+        task_title = (task.title or "").lower().strip()
         if title_lower in task_title or task_title in title_lower:
-            matching_tasks.append(task)
+            matching_tasks.append((task, len(task_title)))  # Store with length for sorting
     
     if matching_tasks:
-        # Return the first match
-        return matching_tasks[0]
+        # Sort by title length (prefer shorter/more specific matches)
+        matching_tasks.sort(key=lambda x: x[1])
+        logger.info(f"Found partial match: {matching_tasks[0][0].title}")
+        return matching_tasks[0][0]
+    
+    # Third pass: word-based matching (any word from query matches)
+    query_words = set(title_lower.split())
+    for task in tasks:
+        task_title = (task.title or "").lower().strip()
+        task_words = set(task_title.split())
+        # If any significant word matches (longer than 2 chars)
+        common_words = query_words & task_words
+        significant_matches = [w for w in common_words if len(w) > 2]
+        if significant_matches:
+            logger.info(f"Found word match: {task.title} (matched words: {significant_matches})")
+            return task
+    
+    logger.warning(f"No task found matching: {title_query}")
     return None
 
 
@@ -852,8 +896,8 @@ async def _delete_task_async(task_title: str, current_user_id: str, company_id: 
     actual_task_title = task.title
     task_id = str(task.id)
     
-    # Delete associated comments
-    await Comment.find(Comment.task_id == task_id).delete()
+    # Delete associated comments - using dictionary-style query for Beanie compatibility
+    await Comment.find({"task_id": task_id}).delete()
     
     # Delete task
     await task.delete()
@@ -1167,76 +1211,108 @@ async def _get_task_collaborators_async(task_title: str, current_user_id: str, c
     return result
 
 
-async def _get_task_history_async(task_title: str, current_user_id: str, company_id: str):
-    """Async implementation of get task history."""
+async def _get_task_history_async(task_title: str, current_user_id: str, company_id: str, skip: int = 0, limit: int = 50):
+    """Async implementation of get task history by task title.
+    
+    Searches for task by title (case-insensitive, partial match supported).
+    """
     from dash_api.app.models.task import Task
     from dash_api.app.models.task_history import TaskHistory
     
-    task = await _find_task_by_title_async(task_title, current_user_id, company_id)
-    if not task:
-        return f"Error: Task '{task_title}' not found."
+    # Clean the input title
+    search_title = task_title.strip()
+    if not search_title:
+        return "Error: Please provide a task title to search for."
     
+    # Find task by title using the robust title search
+    task = await _find_task_by_title_async(search_title, current_user_id, company_id)
+    
+    if not task:
+        # If not found, try a more aggressive search - list all tasks and show suggestions
+        all_tasks = await Task.find({"company_id": company_id}).to_list()
+        if all_tasks:
+            suggestions = []
+            search_lower = search_title.lower()
+            for t in all_tasks[:10]:  # Show up to 10 suggestions
+                title = t.title or ""
+                # Check for any word match
+                if any(word in title.lower() for word in search_lower.split()):
+                    suggestions.append(f"- {title}")
+            
+            if suggestions:
+                return f"Error: Task '{search_title}' not found.\n\n**Did you mean one of these?**\n" + "\n".join(suggestions)
+        
+        return f"Error: Task '{search_title}' not found. Please check the task name and try again."
+    
+    # Verify the task belongs to user's company
+    if task.company_id != company_id:
+        return f"Error: Task not found in your company."
+    
+    # Get the task_id as string - this is critical for the query
     task_id = str(task.id)
     
-    # Try multiple query approaches to find history
-    history = None
+    # Debug: Log what we're searching for
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Searching history for task_id: {task_id}, task title: {task.title}")
     
-    # First try: exact match with both task_id and company_id
+    # Get history from database - using direct dict query for reliability
     history = await TaskHistory.find(
-        {"task_id": task_id, "company_id": company_id}
-    ).sort([("created_at", -1)]).limit(10).to_list()
+        {"task_id": task_id}
+    ).sort([("created_at", -1)]).skip(skip).limit(limit).to_list()
     
-    # Second try: just task_id (in case company_id filter is too strict)
+    # If no history with string ID, try with the raw task.id
     if not history:
         history = await TaskHistory.find(
-            {"task_id": task_id}
-        ).sort([("created_at", -1)]).limit(10).to_list()
-    
-    # Third try: check if task_id is stored without str() conversion
-    if not history:
-        # Try with ObjectId format
-        from bson import ObjectId
-        try:
-            task_object_id = ObjectId(task_id)
-            history = await TaskHistory.find(
-                {"task_id": task_object_id}
-            ).sort([("created_at", -1)]).limit(10).to_list()
-        except:
-            pass
-    
-    # Fourth try: flexible search for any task_id that contains our ID
-    if not history:
-        # Use regex to find partial matches
-        history = await TaskHistory.find(
-            {"task_id": {"$regex": task_id, "$options": "i"}}
-        ).sort([("created_at", -1)]).limit(10).to_list()
+            {"task_id": task.id}
+        ).sort([("created_at", -1)]).skip(skip).limit(limit).to_list()
     
     if not history:
-        # Check if there are ANY history entries at all for debugging
-        total_history_count = await TaskHistory.count()
-        return f"📋 **{task.title}**\n\n📜 **History:** No changes recorded yet.\n\n🔍 **Debug:** Task ID: `{task_id}` | Total history entries in DB: {total_history_count}\n\n💡 **Tip:** History is only created when you make changes through the chatbot tools or the web interface."
+        return f"📋 **{task.title}**\n\n📜 **History:** No changes recorded yet.\n\n💡 **Tip:** History is created when task properties are changed (status, priority, assignee, etc.)."
     
-    result = f"📋 **{task.title}**\n\n📜 **Activity History (Latest 10):**\n\n"
+    result = f"📋 **{task.title}**\n\n📜 **Activity History ({len(history)} entries):**\n\n"
     
     for entry in history:
-        timestamp = entry.created_at.strftime("%Y-%m-%d %H:%M") if entry.created_at else "Unknown"
+        # Format timestamp - prefer IST formatted timestamp if available
+        if hasattr(entry, 'created_at_ist') and entry.created_at_ist:
+            timestamp = entry.created_at_ist
+        elif entry.created_at:
+            timestamp = entry.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            timestamp = "Unknown"
+        
         action = entry.action.value if hasattr(entry.action, 'value') else str(entry.action)
         
+        # Action icons based on type
         action_icon = "📝"
         if "status" in action.lower():
             action_icon = "🔄"
         elif "priority" in action.lower():
             action_icon = "🎯"
-        elif "assigned" in action.lower():
+        elif "assignee" in action.lower():
             action_icon = "👤"
         elif "created" in action.lower():
             action_icon = "✨"
+        elif "project" in action.lower():
+            action_icon = "📁"
+        elif "due" in action.lower():
+            action_icon = "📅"
+        elif "title" in action.lower():
+            action_icon = "✏️"
+        elif "description" in action.lower():
+            action_icon = "📄"
+        elif "collaborator" in action.lower():
+            action_icon = "🤝"
         
         result += f"{action_icon} **{action}** by {entry.user_name}\n"
         result += f"   📅 {timestamp}\n"
         
-        if entry.field_name and entry.old_value is not None and entry.new_value is not None:
-            result += f"   Changed {entry.field_name}: {entry.old_value} → {entry.new_value}\n"
+        # Show field change details
+        if entry.field_name:
+            if entry.old_value is not None and entry.new_value is not None:
+                result += f"   Changed `{entry.field_name}`: {entry.old_value} → {entry.new_value}\n"
+            elif entry.new_value is not None:
+                result += f"   Set `{entry.field_name}`: {entry.new_value}\n"
         
         result += "\n"
     
@@ -1292,16 +1368,25 @@ def get_task_collaborators(task_title: str, current_user_id: str, company_id: st
 
 
 @tool
-def get_task_history(task_title: str, current_user_id: str, company_id: str):
+def get_task_history(task_title: str, current_user_id: str, company_id: str, skip: int = 0, limit: int = 50):
     """Get the activity history of a task - shows what changed and when.
-    Displays the latest 10 changes including status updates, priority changes, assignee changes, etc.
+    Displays changes including status updates, priority changes, assignee changes, due date updates, etc.
+    
+    Searches for the task by title (case-insensitive, supports partial matching).
     
     Parameters:
-    - task_title: The title/name of the task
+    - task_title: The title/name of the task to search for (partial match supported)
     - current_user_id: Current logged-in user ID (auto-populated)
     - company_id: Current company ID (auto-populated)
+    - skip: Number of history entries to skip (for pagination, default 0)
+    - limit: Maximum number of history entries to return (default 50)
+    
+    Example usage:
+    - "Show history for task 'Design Homepage'"
+    - "Get history of the Login Page task"
+    - "What changes were made to the API integration task?"
     """
-    return run_async(_get_task_history_async(task_title, current_user_id, company_id))
+    return run_async(_get_task_history_async(task_title, current_user_id, company_id, skip, limit))
 
 
 @tool
@@ -1315,6 +1400,280 @@ def get_task_comments(task_title: str, current_user_id: str, company_id: str):
     - company_id: Current company ID (auto-populated)
     """
     return run_async(_get_task_comments_async(task_title, current_user_id, company_id))
+
+
+# --- Async Invitation Operations ---
+
+async def _send_invitation_async(
+    invitee_email: str,
+    current_user_id: str,
+    company_id: str,
+    role: str = "Member"
+):
+    """Async implementation of send invitation."""
+    from dash_api.app.models.user import User, UserRole
+    from dash_api.app.models.company import Company
+    from dash_api.app.models.invitation import Invitation, InvitationStatus
+    from datetime import timedelta
+    import re
+    
+    # Validate email format using simple regex
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    invitee_email = invitee_email.strip()
+    if not re.match(email_pattern, invitee_email):
+        return f"Error: Invalid email address '{invitee_email}'. Please provide a valid email."
+    
+    # Get current user (must be admin)
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    # Check if user is admin (handle both enum and string comparison)
+    user_role = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if user_role != "Admin" and user_role.lower() != "admin":
+        return "Error: Only admins can send invitations. Please contact your administrator."
+    
+    # Get company info
+    company = await Company.get(company_id)
+    if not company:
+        return "Error: Company not found."
+    
+    # Check if email belongs to someone already in the company
+    try:
+        existing_users = await User.find({"email": invitee_email}).to_list()
+        existing_user = existing_users[0] if existing_users else None
+        if existing_user:
+            # Check if already a member
+            existing_company_ids = existing_user.get_effective_company_ids() if hasattr(existing_user, 'get_effective_company_ids') else []
+            if company_id in existing_company_ids:
+                return f"Error: User with email '{invitee_email}' is already a member of {company.name}."
+    except Exception as e:
+        logger.warning(f"Error checking existing user: {e}")
+        existing_user = None
+    
+    # Check if invitation already exists and is pending
+    try:
+        status_value = InvitationStatus.PENDING.value if hasattr(InvitationStatus.PENDING, 'value') else str(InvitationStatus.PENDING)
+        existing_invitations = await Invitation.find({
+            "invitee_email": invitee_email,
+            "company_id": company_id,
+            "status": status_value
+        }).to_list()
+        existing_invitation = existing_invitations[0] if existing_invitations else None
+    except Exception as e:
+        logger.warning(f"Error checking existing invitation: {e}")
+        existing_invitation = None
+    
+    if existing_invitation:
+        return f"Error: A pending invitation has already been sent to '{invitee_email}' for {company.name}."
+    
+    # Validate role
+    valid_roles = [r.value for r in UserRole]
+    if role not in valid_roles:
+        return f"Error: Invalid role '{role}'. Valid roles are: {', '.join(valid_roles)}"
+    
+    # Create invitation
+    expires_at = datetime.utcnow() + timedelta(days=30)  # 30-day expiry
+    
+    new_invitation = Invitation(
+        invitee_email=invitee_email,
+        invitee_user_id=str(existing_user.id) if existing_user else None,
+        company_id=company_id,
+        company_name=company.name,
+        inviter_id=current_user_id,
+        inviter_name=current_user.name,
+        role=role,
+        status=InvitationStatus.PENDING,
+        expires_at=expires_at,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    
+    await new_invitation.insert()
+    
+    return f"""✅ **Invitation Sent Successfully!**
+
+📧 **Invitee Email:** {invitee_email}
+🏢 **Company:** {company.name}
+👤 **Role:** {role}
+📅 **Expires:** {expires_at.strftime('%Y-%m-%d')}
+
+The user will receive an invitation to join your company and can accept or decline it."""
+
+
+async def _list_received_invitations_async(current_user_id: str):
+    """Async implementation of list received invitations."""
+    from dash_api.app.models.user import User
+    from dash_api.app.models.invitation import Invitation, InvitationStatus
+    
+    # Get current user
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    # Find invitations sent to this user's email
+    try:
+        invitations = await Invitation.find({
+            "invitee_email": current_user.email
+        }).sort([("created_at", -1)]).to_list()
+    except Exception as e:
+        logger.warning(f"Error fetching received invitations: {e}")
+        return "📭 **No Invitations**\n\nYou haven't received any company invitations yet."
+    
+    if not invitations:
+        return "📭 **No Invitations**\n\nYou haven't received any company invitations yet."
+    
+    # Group by status for better display
+    pending = [inv for inv in invitations if inv.status == InvitationStatus.PENDING]
+    accepted = [inv for inv in invitations if inv.status == InvitationStatus.ACCEPTED]
+    declined = [inv for inv in invitations if inv.status == InvitationStatus.DECLINED]
+    
+    result = "📬 **Your Invitations**\n\n"
+    
+    if pending:
+        result += "🔔 **Pending Invitations:**\n"
+        for inv in pending:
+            expires_str = inv.expires_at.strftime("%Y-%m-%d") if inv.expires_at else "N/A"
+            result += f"  • **{inv.company_name}** - Role: {inv.role} (Expires: {expires_str})\n"
+            result += f"    Sent by: {inv.inviter_name}\n"
+        result += "\n"
+    
+    if accepted:
+        result += "✅ **Accepted Invitations:**\n"
+        for inv in accepted:
+            joined_str = inv.updated_at.strftime("%Y-%m-%d") if inv.updated_at else "N/A"
+            result += f"  • **{inv.company_name}** - Role: {inv.role} (Joined: {joined_str})\n"
+        result += "\n"
+    
+    if declined:
+        result += "❌ **Declined Invitations:**\n"
+        for inv in declined:
+            declined_str = inv.updated_at.strftime("%Y-%m-%d") if inv.updated_at else "N/A"
+            result += f"  • **{inv.company_name}** - Role: {inv.role} (Declined: {declined_str})\n"
+    
+    return result
+
+
+async def _list_sent_invitations_async(current_user_id: str, company_id: str):
+    """Async implementation of list sent invitations - for admins."""
+    from dash_api.app.models.user import User, UserRole
+    from dash_api.app.models.company import Company
+    from dash_api.app.models.invitation import Invitation, InvitationStatus
+    
+    # Get current user (must be admin)
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    # Check if user is admin (handle both enum and string comparison)
+    user_role = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if user_role != "Admin" and user_role.lower() != "admin":
+        return "Error: Only admins can view sent invitations."
+    
+    # Get company info
+    company = await Company.get(company_id)
+    if not company:
+        return "Error: Company not found."
+    
+    # Find invitations sent from this company
+    try:
+        invitations = await Invitation.find({
+            "company_id": company_id
+        }).sort([("created_at", -1)]).to_list()
+    except Exception as e:
+        logger.warning(f"Error fetching sent invitations: {e}")
+        return f"📭 **No Invitations Sent**\n\nNo invitations have been sent from {company.name} yet."
+    
+    if not invitations:
+        return f"📭 **No Invitations Sent**\n\nNo invitations have been sent from {company.name} yet."
+    
+    # Group by status
+    pending = [inv for inv in invitations if inv.status == InvitationStatus.PENDING]
+    accepted = [inv for inv in invitations if inv.status == InvitationStatus.ACCEPTED]
+    declined = [inv for inv in invitations if inv.status == InvitationStatus.DECLINED]
+    
+    result = f"📤 **Invitations Sent from {company.name}**\n\n"
+    
+    if pending:
+        result += f"🔔 **Pending ({len(pending)}):**\n"
+        for inv in pending:
+            expires_str = inv.expires_at.strftime("%Y-%m-%d") if inv.expires_at else "N/A"
+            result += f"  • **{inv.invitee_email}** - Role: {inv.role} (Expires: {expires_str})\n"
+        result += "\n"
+    
+    if accepted:
+        result += f"✅ **Accepted ({len(accepted)}):**\n"
+        for inv in accepted:
+            joined_str = inv.updated_at.strftime("%Y-%m-%d") if inv.updated_at else "N/A"
+            result += f"  • **{inv.invitee_email}** - Role: {inv.role} (Joined: {joined_str})\n"
+        result += "\n"
+    
+    if declined:
+        result += f"❌ **Declined ({len(declined)}):**\n"
+        for inv in declined:
+            declined_str = inv.updated_at.strftime("%Y-%m-%d") if inv.updated_at else "N/A"
+            result += f"  • **{inv.invitee_email}** - Role: {inv.role} (Declined: {declined_str})\n"
+    
+    return result
+
+
+# --- LangGraph Invitation Tools ---
+
+@tool
+def send_invitation(invitee_email: str, current_user_id: str, company_id: str, role: str = "Member"):
+    """Send an invitation to a user to join your company.
+    ADMIN ONLY - Only administrators can send invitations.
+    
+    Parameters:
+    - invitee_email: The email address of the person to invite (e.g., "john@example.com")
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    - role: Role to assign upon acceptance - "Admin", "Member", or "Viewer" (default: "Member")
+    
+    Example usage:
+    - "Send an invitation to samriddhi@email.com"
+    - "Invite john@company.com as an Admin"
+    - "Send invitation to user@example.com with Member role"
+    
+    Note:
+    - Invitations expire after 30 days
+    - The recipient will receive a notification and can accept or decline
+    - User must not already be a member of your company
+    """
+    return run_async(_send_invitation_async(invitee_email, current_user_id, company_id, role))
+
+
+@tool
+def list_received_invitations(current_user_id: str):
+    """List all invitations you have received from companies.
+    Shows pending, accepted, and declined invitations.
+    
+    Parameters:
+    - current_user_id: Current logged-in user ID (auto-populated)
+    
+    Example usage:
+    - "Show me my invitations"
+    - "What invitations have I received?"
+    - "List all my pending invitations"
+    """
+    return run_async(_list_received_invitations_async(current_user_id))
+
+
+@tool
+def list_sent_invitations(current_user_id: str, company_id: str):
+    """List all invitations sent from your company.
+    ADMIN ONLY - Shows pending, accepted, and declined invitations.
+    
+    Parameters:
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example usage:
+    - "Show me all invitations we've sent"
+    - "Who have we invited to join?"
+    - "List pending invitations"
+    """
+    return run_async(_list_sent_invitations_async(current_user_id, company_id))
 
 
 # List of all tools for export
@@ -1335,5 +1694,8 @@ tools = [
     get_task_stats,
     get_task_collaborators,
     get_task_history,
-    get_task_comments
+    get_task_comments,
+    send_invitation,
+    list_received_invitations,
+    list_sent_invitations
 ]

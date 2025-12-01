@@ -164,10 +164,37 @@ When asked about task details, always show collaborators information directly wi
 When displaying collaborators, format as: "Collaborators: Name1, Name2, Name3" or "Collaborators: None"
 
 **Handling Task Details:**
-- When users ask about task history, use 'get_task_history' tool
+- When users ask about task history, use 'get_task_history' tool with the task title
 - When users ask about task comments, use 'get_task_comments' tool
 - When users ask who is working on a task, use 'get_task_collaborators' tool
-- Example user queries: "show task history for X", "get comments on X", "who's working on X", "task collaborators", etc.
+- The 'get_task_history' tool searches by task title (case-insensitive, partial match supported)
+- Example user queries: 
+  - "show task history for Design Homepage"
+  - "get history of the Login Page task"
+  - "what changes were made to API integration?"
+  - "get comments on X", "who's working on X", "task collaborators", etc.
+
+**Invitation Management:**
+
+1. **Sending Invitations (ADMIN ONLY):**
+   - Use 'send_invitation' with the recipient's email and optional role
+   - Default role is "Member" but can also be "Admin" or "Viewer"
+   - Examples: 
+     - "Send an invitation to john@example.com"
+     - "Invite samriddhi@email.com as an Admin"
+     - "Send invitation to user@company.com with Member role"
+   - Invitations expire after 30 days
+   - User must not already be a member of your company
+
+2. **Viewing Invitations:**
+   - Use 'list_received_invitations' to see invitations YOU have received
+   - Use 'list_sent_invitations' to see invitations YOUR COMPANY sent (ADMIN ONLY)
+   - Both tools show the invitation status (Pending, Accepted, Declined)
+   - Examples:
+     - "Show me my invitations"
+     - "What invitations have I received?"
+     - "List all invitations we've sent"
+     - "Who have we invited to join our company?"
 
 **Project Display Format:**
 When displaying projects, use a clean format:
@@ -500,11 +527,14 @@ async def get_chat_history(
     skip: int = 0,
     limit: int = 100
 ):
-    """Get the current chat history for the user, including task history."""
-    user_id = current_user["user_id"]
-    company_id = current_user["company_id"]
+    """Get the current chat conversation history for the user.
     
-    # Get chat conversation history
+    Note: This endpoint only returns chat messages (user/bot conversation).
+    Task history is available via a separate endpoint: /chat/task_history
+    """
+    user_id = current_user["user_id"]
+    
+    # Get chat conversation history only
     chat_history = []
     if user_id in sessions:
         session = sessions[user_id]
@@ -519,6 +549,26 @@ async def get_chat_history(
             if isinstance(m, (HumanMessage, AIMessage))
         ]
     
+    return {
+        "history": chat_history,
+        "total": len(chat_history),
+        "skip": skip,
+        "limit": limit
+    }
+
+
+@api_app.get("/chat/task_history")
+async def get_task_history(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 100
+):
+    """Get task history for the user's company.
+    
+    This is a separate endpoint from chat history for when task activity is needed.
+    """
+    company_id = current_user["company_id"]
+    
     # Get task history from database - all tasks in company
     task_history = []
     try:
@@ -527,9 +577,9 @@ async def get_chat_history(
         logger.info(f"Fetching task history for company_id: {company_id}, skip: {skip}, limit: {limit}")
         
         # Fetch all task history for this company, sorted by created_at descending
-        # Using the same pattern as the TaskController
+        # Using dictionary-style query for Beanie compatibility
         task_history_records = await TaskHistory.find(
-            TaskHistory.company_id == company_id
+            {"company_id": company_id}
         ).sort([("created_at", -1)]).skip(skip).limit(limit).to_list()
         
         logger.info(f"Found {len(task_history_records)} task history records")
@@ -561,16 +611,9 @@ async def get_chat_history(
         logger.error(f"Error fetching task history: {e}", exc_info=True)
         task_history = []
     
-    # Combine and return both chat and task history
-    all_history = chat_history + task_history
-    # Sort by timestamp descending
-    all_history.sort(key=lambda x: x["timestamp"], reverse=True)
-    
-    logger.info(f"Returning {len(all_history)} total history items (chat: {len(chat_history)}, task: {len(task_history)})")
-    
     return {
-        "history": all_history,
-        "total": len(all_history),
+        "history": task_history,
+        "total": len(task_history),
         "skip": skip,
         "limit": limit
     }
@@ -592,8 +635,8 @@ async def debug_task_history(
         all_records = await TaskHistory.find().to_list()
         logger.info(f"DEBUG: Total task history records in DB: {len(all_records)}")
         
-        # Count for this company
-        company_records = await TaskHistory.find(TaskHistory.company_id == company_id).to_list()
+        # Count for this company - using dictionary-style query for Beanie compatibility
+        company_records = await TaskHistory.find({"company_id": company_id}).to_list()
         logger.info(f"DEBUG: Task history records for this company: {len(company_records)}")
         
         if company_records:
