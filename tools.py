@@ -211,6 +211,22 @@ async def _create_task_async(
     )
     
     await new_task.insert()
+    
+    # Create history entry for task creation
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    history = TaskHistory(
+        task_id=str(new_task.id),
+        action=HistoryActionType.CREATED,
+        field_name=None,
+        old_value=None,
+        new_value=title,
+        user_id=current_user_id,
+        user_name=creator.name,
+        user_avatar=creator.avatar_url,
+        company_id=company_id
+    )
+    await history.insert()
+    
     return f"Task '{title}' created successfully and assigned to {assignee.name}."
 
 
@@ -660,9 +676,29 @@ async def _update_task_status_async(task_title: str, new_status: str, current_us
     if not mapped_status:
         return f"Error: Invalid status '{new_status}'. Valid options: To Do, In Progress, Review, Done"
     
+    # Store old status for history
+    old_status = task.status.value if task.status else "To Do"
+    
     task.status = mapped_status
     task.updated_at = datetime.utcnow()
     await task.save()
+    
+    # Create history entry for status change
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    from dash_api.app.models.user import User
+    current_user = await User.get(current_user_id)
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.STATUS_CHANGED,
+        field_name="status",
+        old_value=old_status,
+        new_value=mapped_status.value,
+        user_id=current_user_id,
+        user_name=current_user.name if current_user else "Unknown",
+        user_avatar=current_user.avatar_url if current_user else None,
+        company_id=company_id
+    )
+    await history.insert()
     
     return f"Task '{task.title}' status updated to '{mapped_status.value}'."
 
@@ -693,9 +729,29 @@ async def _update_task_priority_async(task_title: str, new_priority: str, curren
     if not mapped_priority:
         return f"Error: Invalid priority '{new_priority}'. Valid options: Low, Medium, High"
     
+    # Store old priority for history
+    old_priority = task.priority.value if task.priority else "Medium"
+    
     task.priority = mapped_priority
     task.updated_at = datetime.utcnow()
     await task.save()
+    
+    # Create history entry for priority change
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    from dash_api.app.models.user import User
+    current_user = await User.get(current_user_id)
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.PRIORITY_CHANGED,
+        field_name="priority",
+        old_value=old_priority,
+        new_value=mapped_priority.value,
+        user_id=current_user_id,
+        user_name=current_user.name if current_user else "Unknown",
+        user_avatar=current_user.avatar_url if current_user else None,
+        company_id=company_id
+    )
+    await history.insert()
     
     return f"Task '{task.title}' priority updated to '{mapped_priority.value}'."
 
@@ -722,6 +778,24 @@ async def _update_task_project_async(task_title: str, project_name: str, current
         task.project_name = None
         task.updated_at = datetime.utcnow()
         await task.save()
+        
+        # Create history entry for project removal
+        from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+        from dash_api.app.models.user import User
+        current_user = await User.get(current_user_id)
+        history = TaskHistory(
+            task_id=str(task.id),
+            action=HistoryActionType.PROJECT_CHANGED,
+            field_name="project",
+            old_value=old_project,
+            new_value="None",
+            user_id=current_user_id,
+            user_name=current_user.name if current_user else "Unknown",
+            user_avatar=current_user.avatar_url if current_user else None,
+            company_id=company_id
+        )
+        await history.insert()
+        
         return f"Task '{task.title}' has been unlinked from project '{old_project}'."
     
     # Find the project by name
@@ -735,6 +809,23 @@ async def _update_task_project_async(task_title: str, project_name: str, current
     task.project_name = project.name
     task.updated_at = datetime.utcnow()
     await task.save()
+    
+    # Create history entry for project change
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    from dash_api.app.models.user import User
+    current_user = await User.get(current_user_id)
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.PROJECT_CHANGED,
+        field_name="project",
+        old_value=old_project,
+        new_value=project.name,
+        user_id=current_user_id,
+        user_name=current_user.name if current_user else "Unknown",
+        user_avatar=current_user.avatar_url if current_user else None,
+        company_id=company_id
+    )
+    await history.insert()
     
     if old_project == "No project":
         return f"Task '{task.title}' has been linked to project '{project.name}'."
@@ -1087,13 +1178,43 @@ async def _get_task_history_async(task_title: str, current_user_id: str, company
     
     task_id = str(task.id)
     
-    # Get task history (latest 10 entries)
+    # Try multiple query approaches to find history
+    history = None
+    
+    # First try: exact match with both task_id and company_id
     history = await TaskHistory.find(
         {"task_id": task_id, "company_id": company_id}
     ).sort([("created_at", -1)]).limit(10).to_list()
     
+    # Second try: just task_id (in case company_id filter is too strict)
     if not history:
-        return f"📋 **{task.title}**\n\n📜 **History:** No changes recorded yet."
+        history = await TaskHistory.find(
+            {"task_id": task_id}
+        ).sort([("created_at", -1)]).limit(10).to_list()
+    
+    # Third try: check if task_id is stored without str() conversion
+    if not history:
+        # Try with ObjectId format
+        from bson import ObjectId
+        try:
+            task_object_id = ObjectId(task_id)
+            history = await TaskHistory.find(
+                {"task_id": task_object_id}
+            ).sort([("created_at", -1)]).limit(10).to_list()
+        except:
+            pass
+    
+    # Fourth try: flexible search for any task_id that contains our ID
+    if not history:
+        # Use regex to find partial matches
+        history = await TaskHistory.find(
+            {"task_id": {"$regex": task_id, "$options": "i"}}
+        ).sort([("created_at", -1)]).limit(10).to_list()
+    
+    if not history:
+        # Check if there are ANY history entries at all for debugging
+        total_history_count = await TaskHistory.count()
+        return f"📋 **{task.title}**\n\n📜 **History:** No changes recorded yet.\n\n🔍 **Debug:** Task ID: `{task_id}` | Total history entries in DB: {total_history_count}\n\n💡 **Tip:** History is only created when you make changes through the chatbot tools or the web interface."
     
     result = f"📋 **{task.title}**\n\n📜 **Activity History (Latest 10):**\n\n"
     

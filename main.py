@@ -496,26 +496,124 @@ async def reset_chat(
 
 @api_app.get("/chat/history")
 async def get_chat_history(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 100
+):
+    """Get the current chat history for the user, including task history."""
+    user_id = current_user["user_id"]
+    company_id = current_user["company_id"]
+    
+    # Get chat conversation history
+    chat_history = []
+    if user_id in sessions:
+        session = sessions[user_id]
+        chat_history = [
+            {
+                "role": "user" if isinstance(m, HumanMessage) else "bot",
+                "content": m.content if hasattr(m, 'content') else str(m),
+                "timestamp": datetime.utcnow().isoformat(),
+                "type": "chat"
+            }
+            for m in session["messages"]
+            if isinstance(m, (HumanMessage, AIMessage))
+        ]
+    
+    # Get task history from database - all tasks in company
+    task_history = []
+    try:
+        from dash_api.app.models.task_history import TaskHistory
+        
+        logger.info(f"Fetching task history for company_id: {company_id}, skip: {skip}, limit: {limit}")
+        
+        # Fetch all task history for this company, sorted by created_at descending
+        # Using the same pattern as the TaskController
+        task_history_records = await TaskHistory.find(
+            TaskHistory.company_id == company_id
+        ).sort([("created_at", -1)]).skip(skip).limit(limit).to_list()
+        
+        logger.info(f"Found {len(task_history_records)} task history records")
+        
+        task_history = []
+        for record in task_history_records:
+            try:
+                action_value = record.action.value if hasattr(record.action, 'value') else str(record.action)
+                history_item = {
+                    "id": str(record.id),
+                    "task_id": record.task_id,
+                    "action": action_value,
+                    "field_name": record.field_name,
+                    "old_value": record.old_value,
+                    "new_value": record.new_value,
+                    "user_name": record.user_name,
+                    "user_avatar": record.user_avatar,
+                    "timestamp": record.created_at.isoformat() if record.created_at else datetime.utcnow().isoformat(),
+                    "type": "task_history"
+                }
+                task_history.append(history_item)
+            except Exception as record_error:
+                logger.error(f"Error processing task history record: {record_error}")
+                continue
+        
+        logger.info(f"Successfully processed {len(task_history)} task history items")
+        
+    except Exception as e:
+        logger.error(f"Error fetching task history: {e}", exc_info=True)
+        task_history = []
+    
+    # Combine and return both chat and task history
+    all_history = chat_history + task_history
+    # Sort by timestamp descending
+    all_history.sort(key=lambda x: x["timestamp"], reverse=True)
+    
+    logger.info(f"Returning {len(all_history)} total history items (chat: {len(chat_history)}, task: {len(task_history)})")
+    
+    return {
+        "history": all_history,
+        "total": len(all_history),
+        "skip": skip,
+        "limit": limit
+    }
+
+
+@api_app.get("/chat/history/debug")
+async def debug_task_history(
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Get the current chat history for the user."""
-    user_id = current_user["user_id"]
+    """Debug endpoint to check task history collection."""
+    company_id = current_user["company_id"]
     
-    if user_id not in sessions:
-        return {"history": []}
-    
-    session = sessions[user_id]
-    history = [
-        {
-            "role": "user" if isinstance(m, HumanMessage) else "bot",
-            "content": m.content if hasattr(m, 'content') else str(m),
-            "timestamp": datetime.utcnow().isoformat()
+    try:
+        from dash_api.app.models.task_history import TaskHistory
+        
+        logger.info(f"DEBUG: Checking task history for company_id: {company_id}")
+        
+        # Count all records
+        all_records = await TaskHistory.find().to_list()
+        logger.info(f"DEBUG: Total task history records in DB: {len(all_records)}")
+        
+        # Count for this company
+        company_records = await TaskHistory.find(TaskHistory.company_id == company_id).to_list()
+        logger.info(f"DEBUG: Task history records for this company: {len(company_records)}")
+        
+        if company_records:
+            sample = company_records[0]
+            logger.info(f"DEBUG: Sample record: task_id={sample.task_id}, action={sample.action}, company_id={sample.company_id}")
+        
+        # Return debug info
+        return {
+            "total_in_db": len(all_records),
+            "for_company": len(company_records),
+            "company_id": company_id,
+            "sample": {
+                "task_id": company_records[0].task_id if company_records else None,
+                "action": str(company_records[0].action) if company_records else None,
+                "created_at": company_records[0].created_at.isoformat() if company_records else None
+            } if company_records else None
         }
-        for m in session["messages"]
-        if isinstance(m, (HumanMessage, AIMessage))
-    ]
-    
-    return {"history": history}
+    except Exception as e:
+        logger.error(f"DEBUG Error: {e}", exc_info=True)
+        return {"error": str(e)}
 
 
 @api_app.post("/chat/notify_changes")
