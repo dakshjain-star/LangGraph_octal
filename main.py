@@ -71,9 +71,17 @@ def build_system_prompt(user_id: str, user_name: str, company_id: str) -> str:
     ]
     
     display_name = user_name or "there"
+    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
     return f"""
 {random.choice(assistant_roles)}
+
+**CRITICAL - REAL-TIME DATA REQUIREMENT:**
+- Current Server Time: {current_time}
+- ALWAYS use tools to fetch FRESH data from the database for EVERY query about tasks, users, or projects.
+- NEVER rely on previously fetched data from earlier in the conversation - it may be stale.
+- Data changes frequently in real-time. Always call the appropriate tool to get the current state.
+- If a user asks about tasks, users, or projects, ALWAYS call the relevant tool first, even if you showed similar data before.
 
 **Current User Context:**
 - User ID: {user_id}
@@ -85,6 +93,12 @@ def build_system_prompt(user_id: str, user_name: str, company_id: str) -> str:
 - When users greet you, respond warmly with "Hello {display_name}!" and offer assistance.
 - When users say thank you, respond politely and ask if they need anything else.
 
+**⚠️ MANDATORY: ALWAYS FETCH FRESH DATA**
+- You MUST call the appropriate tool for EVERY request about tasks, users, or projects.
+- NEVER reuse or reference data from previous messages - it is likely outdated.
+- Even if the user asks the same question twice, ALWAYS call the tool again to get current data.
+- Dashboard data changes in real-time; previous tool results are immediately stale.
+
 **Task Management Workflow:**
 
 1. **ALWAYS** pass these system parameters to every tool:
@@ -92,39 +106,81 @@ def build_system_prompt(user_id: str, user_name: str, company_id: str) -> str:
    - 'company_id': '{company_id}'
 
 2. **Creating Tasks:**
-   - Required: Title, Due Date (YYYY-MM-DD), Assignee ID
-   - Optional: Description, Priority (Low/Medium/High), Project ID
-   - FIRST use 'list_users' to get assignable user IDs
-   - Optionally use 'list_projects' to get project IDs
+   - Required: Title, Due Date (YYYY-MM-DD), Assignee Name
+   - Optional: Description, Priority (Low/Medium/High), Project Name
+   - Use 'list_users' to find available users by name
+   - Use 'list_projects' to find available projects by name
    - Users cannot assign tasks to themselves
 
 3. **Viewing Tasks:**
-   - Use 'view_my_tasks' to see tasks assigned to or created by the user
+   - Use 'view_my_tasks' to see ONLY tasks ASSIGNED to you (where you are the assignee)
+   - Use 'view_all_my_tasks' when asked about "all tasks", "my work", "my tasks" - shows BOTH assigned to you AND created by you
+   - Use 'search_user_tasks' when asked about a specific person's tasks BY NAME (e.g., "show Samriddhi's tasks") - PREFERRED METHOD
+   - Use 'view_user_tasks' to see tasks by user NAME (ADMIN ONLY)
+   - Use 'view_all_company_tasks' to see ALL tasks in the company (ADMIN ONLY)
    - Use 'get_task_stats' for a summary overview
+   - **IMPORTANT:** When asked about another user's tasks by name (e.g., "show Samriddhi's tasks", "what is John working on?"), USE 'search_user_tasks' DIRECTLY with the name!
 
 4. **Updating Tasks:**
-   - Use 'update_task_status' to change status (To Do, In Progress, Review, Done)
-   - Use 'update_task_priority' to change priority (Low, Medium, High)
-   - Get task IDs from 'view_my_tasks' first
+   - Use 'update_task_status' with the TASK TITLE to change status (To Do, In Progress, Review, Done)
+   - Use 'update_task_priority' with the TASK TITLE to change priority (Low, Medium, High)
+   - Use 'update_task_project' with the TASK TITLE and PROJECT NAME to link/change/remove the project association
+   - Use the task's title/name from 'view_my_tasks' or other viewing tools
 
 5. **Deleting Tasks:**
-   - Use 'delete_task' - only creators can delete their tasks
-   - Get task IDs from 'view_my_tasks' first
+   - Use 'delete_task' with the TASK TITLE - only creators can delete their tasks
+   - Use the task's title/name from task viewing tools
+
+6. **Getting Task Details:**
+   - Use 'get_task_collaborators' to see who is working on a task
+   - Use 'get_task_history' to see all changes and activity on a task
+   - Use 'get_task_comments' to see the latest 5 comments on a task
 
 **Task Display Format:**
-Present task lists as bulleted items:
-* **Task Title** (ID: <id>)
-  * **Status:** <status>
-  * **Priority:** <priority>
-  * **Due Date:** <date>
-  * **Assignee:** <name>
-  * **Created By:** <name>
-  * **Project:** <project name or "No project">
+When displaying tasks, use a clean card-style format with emojis for better readability:
+
+📋 **[Task Title]**
+┣ Status: `<status>`
+┣ Priority: `<priority>`
+┣ Due: `<date>`
+┣ Assignee: <name>
+┣ Collaborators: <names or "None">
+┣ Created By: <name>
+┗ 🗂️ Project: <project name or "Unassigned">
+
+Add a horizontal separator (---) between tasks for clarity. also Leave a blank line between tasks.
+For multiple tasks, add a summary header like "📊 **Found X tasks:**" at the top.
+
+When asked about task details, always show collaborators information directly without needing a separate query.
+When displaying collaborators, format as: "Collaborators: Name1, Name2, Name3" or "Collaborators: None"
+
+**Handling Task Details:**
+- When users ask about task history, use 'get_task_history' tool
+- When users ask about task comments, use 'get_task_comments' tool
+- When users ask who is working on a task, use 'get_task_collaborators' tool
+- Example user queries: "show task history for X", "get comments on X", "who's working on X", "task collaborators", etc.
+
+**Project Display Format:**
+When displaying projects, use a clean format:
+
+🗂️ **[Project Name]**
+┣ Client: <client name>
+┗ Status: `<status>`
+
+also Add a horizontal separator (---) between projects for clarity. also Leave a blank line between projects.
+
+---
 
 **Important Rules:**
-- Never fabricate task IDs; use only IDs from 'view_my_tasks'
+- NEVER show or mention IDs to users - use names and titles instead
+- Use task titles to update or delete tasks
+- Use user names to assign tasks or view their tasks
+- Use project names when associating tasks with projects
 - If required fields are missing, ask for them before proceeding
-- When showing users for assignment, include their IDs for easy reference
+- **ALWAYS call tools to fetch data - NEVER reference old data from this conversation**
+- **Treat every data request as if it's the first time - call the tool again**
+- **When asked about another user's tasks BY NAME, use 'search_user_tasks' directly - it searches by name!**
+- **Admins can view any user's tasks using 'search_user_tasks' or 'view_user_tasks' by name, or all company tasks using 'view_all_company_tasks'**
 """
 
 
@@ -220,6 +276,11 @@ class ResetResponse(BaseModel):
     message: str
 
 
+class DataChangeNotification(BaseModel):
+    """Notification about data changes in the dashboard."""
+    changes: list[str]  # List of change descriptions
+
+
 # --- Authentication Dependency ---
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
@@ -301,6 +362,16 @@ async def chat(
     # Update session with latest company info
     session["company_id"] = company_id
     session["user_name"] = user_name
+    
+    # Check if this is a data-related query that needs fresh data reminder
+    data_keywords = ['task', 'tasks', 'project', 'projects', 'user', 'users', 'assignee', 
+                     'assigned', 'show', 'list', 'view', 'get', 'status', 'my', 'all']
+    needs_fresh_data = any(keyword in req.message.lower() for keyword in data_keywords)
+    
+    # If querying data, inject a system reminder to fetch fresh data
+    if needs_fresh_data:
+        fresh_data_reminder = AIMessage(content=f"[System: Fetching latest data as of {datetime.utcnow().strftime('%H:%M:%S UTC')}...]")
+        # Don't add to session, just use for context
     
     # Add user message
     session["messages"].append(HumanMessage(content=req.message))
@@ -388,6 +459,48 @@ async def get_chat_history(
     ]
     
     return {"history": history}
+
+
+@api_app.post("/chat/notify_changes")
+async def notify_data_changes(
+    notification: DataChangeNotification,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Notify the chatbot about data changes in the dashboard.
+    This injects a system context message so the LLM knows data has been updated.
+    """
+    user_id = current_user["user_id"]
+    user_name = current_user["user_name"]
+    company_id = current_user["company_id"]
+    
+    # Initialize session if not exists
+    if user_id not in sessions:
+        sessions[user_id] = {
+            "messages": [],
+            "user_name": user_name,
+            "company_id": company_id
+        }
+    
+    session = sessions[user_id]
+    
+    # Format changes for the message
+    changes_text = "\n".join([f"• {change}" for change in notification.changes])
+    
+    # Add an AI message that acknowledges the data update
+    update_message = AIMessage(content=f"""🔄 **Dashboard Data Updated**
+
+The following changes have been made in the dashboard:
+{changes_text}
+
+I'm now aware of these updates. When you ask about tasks, I'll fetch the latest data from the database to ensure accuracy.""")
+    
+    session["messages"].append(update_message)
+    
+    return {
+        "status": "success",
+        "message": f"Notified chatbot about {len(notification.changes)} change(s)"
+    }
 
 
 @api_app.get("/health")
