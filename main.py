@@ -37,8 +37,8 @@ from dash_api.app.config import settings as dash_settings
 # Import database connection
 from model import connect_db, close_db
 
-# Import tools
-from tools import tools, set_main_loop
+# Import tools (modular package)
+from chatbot_tools import tools, set_main_loop
 
 # Import WebSocket client
 from websocket_client import get_or_create_ws_handler, get_ws_handler, close_ws_handler
