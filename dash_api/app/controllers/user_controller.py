@@ -436,7 +436,9 @@ class UserController:
         
         # Send real-time WebSocket notification to the invitee
         invitation_data = invitation_response.model_dump()
-        # Convert datetime objects for JSON serialization
+        # Convert datetime objects and enums for JSON serialization
+        if invitation_data.get('status'):
+            invitation_data['status'] = invitation_data['status'].value if hasattr(invitation_data['status'], 'value') else str(invitation_data['status'])
         if invitation_data.get('created_at'):
             invitation_data['created_at'] = invitation_data['created_at'].isoformat() if hasattr(invitation_data['created_at'], 'isoformat') else str(invitation_data['created_at'])
         if invitation_data.get('updated_at'):

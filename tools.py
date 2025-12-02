@@ -72,6 +72,45 @@ async def _notify_chatbot_db_change(company_id: str, change_type: str, details: 
         logger.error(f"[CHATBOT TOOLS] ✗ Failed to send notification: {e}")
         logger.error(f"[CHATBOT TOOLS] Traceback: {traceback.format_exc()}")
 
+
+async def _notify_invitation_to_user(invitee_user_id: str, invitation_data: dict):
+    """Send WebSocket notification directly to a specific user when they receive an invitation.
+    
+    This makes an HTTP request to the dash_api server (port 8000) to trigger
+    a USER_INVITED WebSocket event to the specific user.
+    """
+    try:
+        logger.info(f"[CHATBOT TOOLS] Sending invitation notification to user: {invitee_user_id}")
+        logger.info(f"[CHATBOT TOOLS] Invitation data: {invitation_data}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{DASH_API_BASE_URL}/api/v1/ws/invitation-notify",
+                json={
+                    "invitee_user_id": invitee_user_id,
+                    "invitation_data": invitation_data
+                },
+                headers={
+                    "X-Internal-Secret": "chatbot-internal-secret",
+                    "Content-Type": "application/json"
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"[CHATBOT TOOLS] ✓ Invitation notification sent to user: {invitee_user_id}")
+                logger.info(f"[CHATBOT TOOLS] ✓ User online: {result.get('user_online', False)}")
+            else:
+                logger.error(f"[CHATBOT TOOLS] ✗ Invitation notification failed: {response.status_code} - {response.text}")
+                
+    except httpx.ConnectError as e:
+        logger.error(f"[CHATBOT TOOLS] ✗ Cannot connect to dash_api at {DASH_API_BASE_URL}: {e}")
+    except Exception as e:
+        import traceback
+        logger.error(f"[CHATBOT TOOLS] ✗ Failed to send invitation notification: {e}")
+        logger.error(f"[CHATBOT TOOLS] Traceback: {traceback.format_exc()}")
+
 # --- Async Helper ---
 def run_async(coro):
     """Run async code in sync context for LangGraph tools.
@@ -189,11 +228,14 @@ async def _find_task_by_title_async(title_query: str, current_user_id: str, comp
 
 
 async def _find_project_by_name_async(name_query: str, company_id: str):
-    """Find a project by name (partial match) in the company."""
-    from dash_api.app.models.project import Project, ProjectStatus
+    """Find a project by name (partial match) in the company.
+    Searches all projects regardless of status (Active, Archived, On Hold).
+    """
+    from dash_api.app.models.project import Project
     
+    # Get ALL projects in the company (not just active)
     projects = await Project.find(
-        {"company_id": company_id, "status": ProjectStatus.ACTIVE}
+        {"company_id": company_id}
     ).to_list()
     
     name_lower = name_query.lower().strip()
@@ -867,6 +909,78 @@ async def _update_task_priority_async(task_title: str, new_priority: str, curren
     return f"Task '{task.title}' priority updated to '{mapped_priority.value}'."
 
 
+async def _update_task_due_date_async(task_title: str, new_due_date: str, current_user_id: str, company_id: str):
+    """Async implementation of update task due date by task title."""
+    from dash_api.app.models.task import Task
+    
+    task = await _find_task_by_title_async(task_title, current_user_id, company_id)
+    if not task:
+        return f"Error: Task '{task_title}' not found. Please check the task name and try again."
+    
+    # Authorization check
+    if task.company_id != company_id:
+        return "Error: Task not found or permission denied."
+    
+    if task.assignee_id != current_user_id and task.creator_id != current_user_id:
+        return "Error: You don't have permission to update this task."
+    
+    # Parse the new due date
+    try:
+        # Support multiple date formats
+        parsed_date = None
+        for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y"]:
+            try:
+                parsed_date = datetime.strptime(new_due_date, fmt)
+                break
+            except ValueError:
+                continue
+        
+        if not parsed_date:
+            return f"Error: Invalid date format '{new_due_date}'. Please use YYYY-MM-DD format (e.g., 2024-12-31)."
+    except Exception as e:
+        return f"Error: Could not parse date '{new_due_date}'. Please use YYYY-MM-DD format."
+    
+    # Store old due date for history
+    old_due_date = None
+    if task.due_date:
+        if isinstance(task.due_date, datetime):
+            old_due_date = task.due_date.strftime("%Y-%m-%d")
+        else:
+            old_due_date = str(task.due_date)
+    else:
+        old_due_date = "Not set"
+    
+    task.due_date = parsed_date
+    task.updated_at = datetime.utcnow()
+    await task.save()
+    
+    # Create history entry for due date change
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    from dash_api.app.models.user import User
+    current_user = await User.get(current_user_id)
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.UPDATED,
+        field_name="due_date",
+        old_value=old_due_date,
+        new_value=parsed_date.strftime("%Y-%m-%d"),
+        user_id=current_user_id,
+        user_name=current_user.name if current_user else "Unknown",
+        user_avatar=current_user.avatar_url if current_user else None,
+        company_id=company_id
+    )
+    await history.insert()
+    
+    # Notify via WebSocket that chatbot updated task due date
+    await _notify_chatbot_db_change(
+        company_id,
+        "task_due_date_updated",
+        {"task_id": str(task.id), "task_title": task.title, "old_due_date": old_due_date, "new_due_date": parsed_date.strftime("%Y-%m-%d")}
+    )
+    
+    return f"Task '{task.title}' due date updated to '{parsed_date.strftime('%Y-%m-%d')}'."
+
+
 async def _update_task_project_async(task_title: str, project_name: str, current_user_id: str, company_id: str):
     """Async implementation of update task project by task title."""
     from dash_api.app.models.task import Task
@@ -1172,6 +1286,19 @@ def update_task_priority(task_title: str, new_priority: str, current_user_id: st
     - company_id: Current company ID (auto-populated)
     """
     return run_async(_update_task_priority_async(task_title, new_priority, current_user_id, company_id))
+
+
+@tool
+def update_task_due_date(task_title: str, new_due_date: str, current_user_id: str, company_id: str):
+    """Update the due date/deadline of a task by its title/name.
+    
+    Parameters:
+    - task_title: The title/name of the task to update (e.g., "Major API Integration", "Fix bug")
+    - new_due_date: New due date in YYYY-MM-DD format (e.g., "2024-12-31", "2025-01-15")
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    """
+    return run_async(_update_task_due_date_async(task_title, new_due_date, current_user_id, company_id))
 
 
 @tool
@@ -1579,12 +1706,33 @@ async def _send_invitation_async(
     
     await new_invitation.insert()
     
-    # Notify via WebSocket that chatbot sent an invitation
+    # Notify via WebSocket that chatbot sent an invitation (broadcasts to company)
     await _notify_chatbot_db_change(
         company_id,
         "invitation_sent",
         {"invitation_id": str(new_invitation.id), "invitee_email": invitee_email, "role": role}
     )
+    
+    # Also send a direct notification to the invitee user if they exist
+    if existing_user:
+        await _notify_invitation_to_user(
+            str(existing_user.id),
+            {
+                "id": str(new_invitation.id),
+                "invitee_email": invitee_email,
+                "invitee_user_id": str(existing_user.id),
+                "company_id": company_id,
+                "company_name": company.name,
+                "inviter_id": current_user_id,
+                "inviter_name": current_user.name,
+                "role": role,
+                "status": "Pending",
+                "created_at": new_invitation.created_at.isoformat() if new_invitation.created_at else None,
+                "updated_at": new_invitation.updated_at.isoformat() if new_invitation.updated_at else None,
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "message": f"You have been invited to join {company.name}"
+            }
+        )
     
     return f"""✅ **Invitation Sent Successfully!**
 
@@ -1771,6 +1919,552 @@ def list_sent_invitations(current_user_id: str, company_id: str):
     return run_async(_list_sent_invitations_async(current_user_id, company_id))
 
 
+# --- Async Project Update Operations ---
+
+async def _update_project_name_async(project_name: str, new_name: str, current_user_id: str, company_id: str):
+    """Async implementation of update project name."""
+    from dash_api.app.models.project import Project
+    from dash_api.app.models.user import User, UserRole
+    from dash_api.app.models.task import Task
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Check permissions - owner or admin can update
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    if project.owner_id != current_user_id and current_user.role != UserRole.ADMIN:
+        return "Error: Only the project owner or an admin can update this project."
+    
+    old_name = project.name
+    project.name = new_name
+    project.updated_at = datetime.utcnow()
+    await project.save()
+    
+    # Update project_name in all associated tasks
+    tasks = await Task.find({"project_id": str(project.id)}).to_list()
+    for task in tasks:
+        task.project_name = new_name
+        await task.save()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_name_updated",
+        {"project_id": str(project.id), "old_name": old_name, "new_name": new_name}
+    )
+    
+    return f"Project name updated from '{old_name}' to '{new_name}'."
+
+
+async def _update_project_status_async(project_name: str, new_status: str, current_user_id: str, company_id: str):
+    """Async implementation of update project status."""
+    from dash_api.app.models.project import Project, ProjectStatus
+    from dash_api.app.models.user import User, UserRole
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Check permissions
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    if project.owner_id != current_user_id and current_user.role != UserRole.ADMIN:
+        return "Error: Only the project owner or an admin can update this project."
+    
+    # Map status string to enum
+    status_map = {
+        "active": ProjectStatus.ACTIVE,
+        "archived": ProjectStatus.ARCHIVED,
+        "on hold": ProjectStatus.ON_HOLD,
+        "onhold": ProjectStatus.ON_HOLD,
+        "on-hold": ProjectStatus.ON_HOLD
+    }
+    
+    mapped_status = status_map.get(new_status.lower())
+    if not mapped_status:
+        return f"Error: Invalid status '{new_status}'. Valid options: Active, Archived, On Hold"
+    
+    old_status = project.status.value if project.status else "Active"
+    project.status = mapped_status
+    project.updated_at = datetime.utcnow()
+    await project.save()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_status_updated",
+        {"project_id": str(project.id), "project_name": project.name, "old_status": old_status, "new_status": mapped_status.value}
+    )
+    
+    return f"Project '{project.name}' status updated from '{old_status}' to '{mapped_status.value}'."
+
+
+async def _update_project_client_async(project_name: str, new_client: str, current_user_id: str, company_id: str):
+    """Async implementation of update project client."""
+    from dash_api.app.models.project import Project
+    from dash_api.app.models.user import User, UserRole
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Check permissions
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    if project.owner_id != current_user_id and current_user.role != UserRole.ADMIN:
+        return "Error: Only the project owner or an admin can update this project."
+    
+    old_client = project.client_name
+    project.client_name = new_client
+    project.updated_at = datetime.utcnow()
+    await project.save()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_client_updated",
+        {"project_id": str(project.id), "project_name": project.name, "old_client": old_client, "new_client": new_client}
+    )
+    
+    return f"Project '{project.name}' client updated from '{old_client}' to '{new_client}'."
+
+
+async def _update_project_owner_async(project_name: str, new_owner_name: str, current_user_id: str, company_id: str):
+    """Async implementation of update project owner."""
+    from dash_api.app.models.project import Project
+    from dash_api.app.models.user import User, UserRole
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Check permissions - only admin can change project owner
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    if current_user.role != UserRole.ADMIN:
+        return "Error: Only admins can change project ownership."
+    
+    # Find the new owner by name
+    new_owner = await _find_user_by_name_async(new_owner_name, current_user_id, company_id)
+    if not new_owner:
+        users_list = await _list_users_async(current_user_id, company_id)
+        return f"Error: Could not find a user named '{new_owner_name}'.\n\nHere are the available users:\n{users_list}"
+    
+    new_owner_user = await User.get(new_owner["id"])
+    if not new_owner_user:
+        return "Error: New owner user not found."
+    
+    old_owner_name = project.owner_name
+    project.owner_id = new_owner["id"]
+    project.owner_name = new_owner_user.name
+    project.updated_at = datetime.utcnow()
+    await project.save()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_owner_updated",
+        {"project_id": str(project.id), "project_name": project.name, "old_owner": old_owner_name, "new_owner": new_owner_user.name}
+    )
+    
+    return f"Project '{project.name}' owner changed from '{old_owner_name}' to '{new_owner_user.name}'."
+
+
+async def _update_project_deadline_async(project_name: str, new_deadline: str, current_user_id: str, company_id: str):
+    """Async implementation of update project deadline."""
+    from dash_api.app.models.project import Project
+    from dash_api.app.models.user import User, UserRole
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Check permissions
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    if project.owner_id != current_user_id and current_user.role != UserRole.ADMIN:
+        return "Error: Only the project owner or an admin can update this project."
+    
+    # Handle removing deadline
+    if not new_deadline or new_deadline.lower() in ["none", "remove", "clear"]:
+        old_deadline = project.due_date.strftime("%Y-%m-%d") if project.due_date else "None"
+        project.due_date = None
+        project.updated_at = datetime.utcnow()
+        await project.save()
+        
+        await _notify_chatbot_db_change(
+            company_id,
+            "project_deadline_updated",
+            {"project_id": str(project.id), "project_name": project.name, "old_deadline": old_deadline, "new_deadline": "None"}
+        )
+        
+        return f"Project '{project.name}' deadline removed (was '{old_deadline}')."
+    
+    # Parse new deadline
+    try:
+        parsed_date = datetime.strptime(new_deadline, "%Y-%m-%d")
+    except ValueError:
+        return "Error: Invalid date format. Use YYYY-MM-DD format (e.g., 2024-12-31)."
+    
+    old_deadline = project.due_date.strftime("%Y-%m-%d") if project.due_date else "None"
+    project.due_date = parsed_date
+    project.updated_at = datetime.utcnow()
+    await project.save()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_deadline_updated",
+        {"project_id": str(project.id), "project_name": project.name, "old_deadline": old_deadline, "new_deadline": new_deadline}
+    )
+    
+    return f"Project '{project.name}' deadline updated from '{old_deadline}' to '{new_deadline}'."
+
+
+async def _update_project_description_async(project_name: str, new_description: str, current_user_id: str, company_id: str):
+    """Async implementation of update project description."""
+    from dash_api.app.models.project import Project
+    from dash_api.app.models.user import User, UserRole
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Check permissions
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    if project.owner_id != current_user_id and current_user.role != UserRole.ADMIN:
+        return "Error: Only the project owner or an admin can update this project."
+    
+    old_description = project.description[:50] + "..." if len(project.description) > 50 else project.description
+    project.description = new_description
+    project.updated_at = datetime.utcnow()
+    await project.save()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_description_updated",
+        {"project_id": str(project.id), "project_name": project.name}
+    )
+    
+    return f"Project '{project.name}' description updated successfully."
+
+
+async def _add_task_to_project_async(task_title: str, project_name: str, current_user_id: str, company_id: str):
+    """Async implementation of add task to project."""
+    from dash_api.app.models.task import Task
+    from dash_api.app.models.project import Project
+    from dash_api.app.models.user import User, UserRole
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    
+    # Find the task
+    task = await _find_task_by_title_async(task_title, current_user_id, company_id)
+    if not task:
+        return f"Error: Task '{task_title}' not found. Please check the task name and try again."
+    
+    # Find the project
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Authorization check
+    if task.company_id != company_id:
+        return "Error: Task not found or permission denied."
+    
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    # Check if task is already in this project
+    if task.project_id == str(project.id):
+        return f"Task '{task.title}' is already in project '{project.name}'."
+    
+    old_project_name = task.project_name or "No project"
+    task.project_id = str(project.id)
+    task.project_name = project.name
+    task.updated_at = datetime.utcnow()
+    await task.save()
+    
+    # Create history entry
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.PROJECT_CHANGED,
+        field_name="project",
+        old_value=old_project_name,
+        new_value=project.name,
+        user_id=current_user_id,
+        user_name=current_user.name,
+        user_avatar=current_user.avatar_url if hasattr(current_user, 'avatar_url') else None,
+        company_id=company_id
+    )
+    await history.insert()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_task_added",
+        {"project_id": str(project.id), "project_name": project.name, "task_id": str(task.id), "task_title": task.title}
+    )
+    
+    return f"Task '{task.title}' has been added to project '{project.name}'."
+
+
+async def _remove_task_from_project_async(task_title: str, current_user_id: str, company_id: str):
+    """Async implementation of remove task from its project."""
+    from dash_api.app.models.task import Task
+    from dash_api.app.models.user import User
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+    
+    # Find the task
+    task = await _find_task_by_title_async(task_title, current_user_id, company_id)
+    if not task:
+        return f"Error: Task '{task_title}' not found. Please check the task name and try again."
+    
+    # Authorization check
+    if task.company_id != company_id:
+        return "Error: Task not found or permission denied."
+    
+    if not task.project_id:
+        return f"Task '{task.title}' is not associated with any project."
+    
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+    
+    old_project_name = task.project_name or "Unknown project"
+    task.project_id = None
+    task.project_name = None
+    task.updated_at = datetime.utcnow()
+    await task.save()
+    
+    # Create history entry
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.PROJECT_CHANGED,
+        field_name="project",
+        old_value=old_project_name,
+        new_value="None",
+        user_id=current_user_id,
+        user_name=current_user.name,
+        user_avatar=current_user.avatar_url if hasattr(current_user, 'avatar_url') else None,
+        company_id=company_id
+    )
+    await history.insert()
+    
+    # Notify via WebSocket
+    await _notify_chatbot_db_change(
+        company_id,
+        "project_task_removed",
+        {"old_project_name": old_project_name, "task_id": str(task.id), "task_title": task.title}
+    )
+    
+    return f"Task '{task.title}' has been removed from project '{old_project_name}'."
+
+
+async def _get_project_tasks_async(project_name: str, current_user_id: str, company_id: str):
+    """Async implementation of get project tasks."""
+    from dash_api.app.models.task import Task, TaskStatus
+    from dash_api.app.models.project import Project
+    
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+    
+    # Get all tasks for this project
+    tasks = await Task.find({"project_id": str(project.id), "company_id": company_id}).to_list()
+    
+    if not tasks:
+        return f"📁 **{project.name}**\n\n📋 No tasks found in this project."
+    
+    # Format task list
+    result = f"📁 **{project.name}**\n\n📋 **Tasks ({len(tasks)}):**\n\n"
+    
+    for task in tasks:
+        status_icon = "⬜"
+        if task.status == TaskStatus.IN_PROGRESS:
+            status_icon = "🔄"
+        elif task.status == TaskStatus.REVIEW:
+            status_icon = "👀"
+        elif task.status == TaskStatus.DONE:
+            status_icon = "✅"
+        
+        priority_icon = ""
+        if hasattr(task, 'priority') and task.priority:
+            priority_val = task.priority.value if hasattr(task.priority, 'value') else str(task.priority)
+            if priority_val == "High":
+                priority_icon = "🔴"
+            elif priority_val == "Medium":
+                priority_icon = "🟡"
+            else:
+                priority_icon = "🟢"
+        
+        due_str = ""
+        if task.due_date:
+            due_str = f" (Due: {task.due_date.strftime('%Y-%m-%d') if isinstance(task.due_date, datetime) else str(task.due_date)})"
+        
+        result += f"{status_icon} {priority_icon} **{task.title}** - {task.assignee_name}{due_str}\n"
+    
+    return result
+
+
+# --- LangGraph Project Update Tools ---
+
+@tool
+def update_project_name(project_name: str, new_name: str, current_user_id: str, company_id: str):
+    """Update the name of a project.
+    
+    Parameters:
+    - project_name: Current name of the project to update
+    - new_name: New name for the project
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Rename project 'Alpha' to 'Alpha 2.0'"
+    """
+    return run_async(_update_project_name_async(project_name, new_name, current_user_id, company_id))
+
+
+@tool
+def update_project_status(project_name: str, new_status: str, current_user_id: str, company_id: str):
+    """Update the status of a project.
+    
+    Parameters:
+    - project_name: Name of the project to update
+    - new_status: New status - "Active", "Archived", or "On Hold"
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Set project 'Alpha' status to On Hold"
+    """
+    return run_async(_update_project_status_async(project_name, new_status, current_user_id, company_id))
+
+
+@tool
+def update_project_client(project_name: str, new_client: str, current_user_id: str, company_id: str):
+    """Update the client of a project.
+    
+    Parameters:
+    - project_name: Name of the project to update
+    - new_client: New client name
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Change client for project 'Alpha' to 'Acme Corp'"
+    """
+    return run_async(_update_project_client_async(project_name, new_client, current_user_id, company_id))
+
+
+@tool
+def update_project_owner(project_name: str, new_owner_name: str, current_user_id: str, company_id: str):
+    """Update the owner of a project. ADMIN ONLY.
+    
+    Parameters:
+    - project_name: Name of the project to update
+    - new_owner_name: Name of the new project owner (e.g., "John", "Samriddhi")
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Make Samriddhi the owner of project 'Alpha'"
+    """
+    return run_async(_update_project_owner_async(project_name, new_owner_name, current_user_id, company_id))
+
+
+@tool
+def update_project_deadline(project_name: str, new_deadline: str, current_user_id: str, company_id: str):
+    """Update the deadline/due date of a project.
+    
+    Parameters:
+    - project_name: Name of the project to update
+    - new_deadline: New deadline in YYYY-MM-DD format, or "none" to remove
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Set deadline for project 'Alpha' to 2025-03-15"
+    """
+    return run_async(_update_project_deadline_async(project_name, new_deadline, current_user_id, company_id))
+
+
+@tool
+def update_project_description(project_name: str, new_description: str, current_user_id: str, company_id: str):
+    """Update the description of a project.
+    
+    Parameters:
+    - project_name: Name of the project to update
+    - new_description: New description text
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Update description of project 'Alpha' to 'New mobile app development'"
+    """
+    return run_async(_update_project_description_async(project_name, new_description, current_user_id, company_id))
+
+
+@tool
+def add_task_to_project(task_title: str, project_name: str, current_user_id: str, company_id: str):
+    """Add a task to a project.
+    
+    Parameters:
+    - task_title: Title of the task to add to the project
+    - project_name: Name of the project to add the task to
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Add task 'Design Homepage' to project 'Alpha'"
+    """
+    return run_async(_add_task_to_project_async(task_title, project_name, current_user_id, company_id))
+
+
+@tool
+def remove_task_from_project(task_title: str, current_user_id: str, company_id: str):
+    """Remove a task from its current project.
+    
+    Parameters:
+    - task_title: Title of the task to remove from its project
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Remove task 'Design Homepage' from its project"
+    """
+    return run_async(_remove_task_from_project_async(task_title, current_user_id, company_id))
+
+
+@tool
+def get_project_tasks(project_name: str, current_user_id: str, company_id: str):
+    """Get all tasks associated with a project.
+    
+    Parameters:
+    - project_name: Name of the project to get tasks for
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    
+    Example: "Show all tasks in project 'Alpha'"
+    """
+    return run_async(_get_project_tasks_async(project_name, current_user_id, company_id))
+
+
 # List of all tools for export
 tools = [
     create_task,
@@ -1782,6 +2476,7 @@ tools = [
     view_all_company_tasks,
     update_task_status,
     update_task_priority,
+    update_task_due_date,
     update_task_project,
     delete_task,
     list_projects,
@@ -1792,5 +2487,15 @@ tools = [
     get_task_comments,
     send_invitation,
     list_received_invitations,
-    list_sent_invitations
+    list_sent_invitations,
+    # Project update tools
+    update_project_name,
+    update_project_status,
+    update_project_client,
+    update_project_owner,
+    update_project_deadline,
+    update_project_description,
+    add_task_to_project,
+    remove_task_from_project,
+    get_project_tasks
 ]
