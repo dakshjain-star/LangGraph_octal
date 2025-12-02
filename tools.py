@@ -36,7 +36,7 @@ async def _notify_chatbot_db_change(company_id: str, change_type: str, details: 
     
     This makes an HTTP request to the dash_api server (port 8000) to trigger
     the WebSocket broadcast. This is necessary because the chatbot runs on
-    a separate process (port 8080) and doesn't share the WebSocket connection
+    a separate process (port 8081) and doesn't share the WebSocket connection
     manager with dash_api.
     """
     try:

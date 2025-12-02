@@ -153,7 +153,7 @@ async def chatbot_notify(
     """
     HTTP endpoint for chatbot to trigger WebSocket notifications.
     
-    This endpoint is called by the chatbot (running on port 8080) to notify
+    This endpoint is called by the chatbot (running on port 8081) to notify
     the dash_api (running on port 8000) to broadcast WebSocket messages.
     
     The chatbot and dash_api run in separate processes, so direct function

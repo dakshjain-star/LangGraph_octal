@@ -27,7 +27,7 @@ const ChatInterface = ({ user, onLogout }) => {
     setResetting(true);
 
     try {
-      await axios.post('http://localhost:8080/reset_chat', {
+      await axios.post('http://localhost:8081/reset_chat', {
         token: user.token,
       });
     } catch (err) {
@@ -58,7 +58,7 @@ const ChatInterface = ({ user, onLogout }) => {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://localhost:8080/chat', {
+      const res = await axios.post('http://localhost:8081/chat', {
         message: userMsg,
         token: user.token
       });
