@@ -916,6 +916,80 @@ async def get_websocket_status(
     }
 
 
+@api_app.post("/chat/test_notification")
+async def test_chatbot_notification(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Test endpoint to manually trigger a chatbot DB change notification (no auth required for testing)."""
+    try:
+        from dash_api.app.services.websocket import notify_chatbot_db_change, manager
+        
+        # Try to get user from token, but don't require it
+        company_id = None
+        user_id = None
+        
+        if credentials and credentials.credentials:
+            try:
+                payload = dash_verify_token(credentials.credentials, token_type="access")
+                if payload:
+                    user_id = payload.get("sub")
+                    # Get user's company
+                    from dash_api.app.models.user import User
+                    user = await User.get(user_id)
+                    if user:
+                        company_id = user.current_company_id or (user.company_ids[0] if user.company_ids else None)
+            except:
+                pass
+        
+        # If no company found, broadcast to all connected companies
+        if not company_id:
+            # Get all companies with active connections
+            active_companies = list(manager.company_users.keys())
+            logger.info(f"[TEST] No specific company, broadcasting to all: {active_companies}")
+            
+            for comp_id in active_companies:
+                await notify_chatbot_db_change(
+                    comp_id,
+                    "test_notification",
+                    {
+                        "test": True,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "message": "Test notification from chatbot"
+                    }
+                )
+            
+            return {
+                "status": "success",
+                "message": f"Test notification sent to {len(active_companies)} company/companies",
+                "companies": active_companies
+            }
+        
+        logger.info(f"[TEST] Triggering notification for company {company_id}")
+        
+        await notify_chatbot_db_change(
+            company_id,
+            "test_notification",
+            {
+                "test": True,
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "Test notification from chatbot"
+            }
+        )
+        
+        return {
+            "status": "success",
+            "message": "Test notification sent",
+            "company_id": company_id,
+            "user_id": user_id
+        }
+    except Exception as e:
+        logger.error(f"[TEST] Failed to send notification: {e}")
+        import traceback
+        logger.error(f"[TEST] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @api_app.get("/health")
 async def health():
     """Health check endpoint."""

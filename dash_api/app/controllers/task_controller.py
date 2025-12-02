@@ -820,7 +820,7 @@ class TaskController:
                 new_value=new_status.value
             )
         
-        return TaskResponse(
+        task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
             description=task.description,
@@ -840,6 +840,16 @@ class TaskController:
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
         )
+
+        # Broadcast update so dashboards refresh immediately
+        task_data = task_response.model_dump()
+        for field in ("due_date", "created_at", "updated_at"):
+            if task_data.get(field) and hasattr(task_data[field], "isoformat"):
+                task_data[field] = task_data[field].isoformat()
+
+        await notify_task_updated(task_data, task.company_id, str(current_user.id))
+
+        return task_response
     
     @staticmethod
     async def update_task_assignee(task_id: str, data: TaskAssigneeUpdate, current_user: User) -> TaskResponse:
@@ -897,7 +907,7 @@ class TaskController:
                 new_value=assignee.name
             )
         
-        return TaskResponse(
+        task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
             description=task.description,
@@ -917,6 +927,19 @@ class TaskController:
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
         )
+
+        task_data = task_response.model_dump()
+        for field in ("due_date", "created_at", "updated_at"):
+            if task_data.get(field) and hasattr(task_data[field], "isoformat"):
+                task_data[field] = task_data[field].isoformat()
+
+        await notify_task_updated(task_data, task.company_id, str(current_user.id))
+
+        # Notify the newly assigned user so they receive task card instantly
+        if task.assignee_id:
+            await notify_task_assigned(task_data, task.assignee_id, str(current_user.id))
+
+        return task_response
     
     @staticmethod
     async def delete_task(task_id: str, current_user: User) -> Dict:

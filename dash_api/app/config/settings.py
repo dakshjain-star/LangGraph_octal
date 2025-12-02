@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     
+    # Internal API secret for chatbot communication
+    internal_api_secret: str = "chatbot-internal-secret"
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

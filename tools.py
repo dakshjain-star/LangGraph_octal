@@ -11,6 +11,7 @@ import sys
 import os
 import threading
 import logging
+import httpx
 
 # Add dash_api to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'dash_api'))
@@ -20,11 +21,56 @@ logger = logging.getLogger(__name__)
 # Store reference to main event loop
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
+# dash_api base URL (where WebSocket connections are managed)
+DASH_API_BASE_URL = os.environ.get("DASH_API_URL", "http://localhost:8000")
+
 def set_main_loop(loop: asyncio.AbstractEventLoop):
     """Set the main event loop reference (call from FastAPI startup)."""
     global _main_loop
     _main_loop = loop
     logger.info(f"Main event loop set: {loop}")
+
+# --- WebSocket Notification Helper ---
+async def _notify_chatbot_db_change(company_id: str, change_type: str, details: dict = None):
+    """Send WebSocket notification when chatbot makes a DB change.
+    
+    This makes an HTTP request to the dash_api server (port 8000) to trigger
+    the WebSocket broadcast. This is necessary because the chatbot runs on
+    a separate process (port 8080) and doesn't share the WebSocket connection
+    manager with dash_api.
+    """
+    try:
+        logger.info(f"[CHATBOT TOOLS] Attempting to notify via HTTP: {change_type} for company {company_id}")
+        logger.info(f"[CHATBOT TOOLS] Details: {details}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{DASH_API_BASE_URL}/api/v1/ws/chatbot-notify",
+                json={
+                    "company_id": company_id,
+                    "change_type": change_type,
+                    "details": details or {}
+                },
+                headers={
+                    "X-Internal-Secret": "chatbot-internal-secret",
+                    "Content-Type": "application/json"
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"[CHATBOT TOOLS] ✓ Successfully sent notification: {change_type}")
+                logger.info(f"[CHATBOT TOOLS] ✓ Users notified: {result.get('users_notified', 0)}")
+            else:
+                logger.error(f"[CHATBOT TOOLS] ✗ HTTP notification failed: {response.status_code} - {response.text}")
+                
+    except httpx.ConnectError as e:
+        logger.error(f"[CHATBOT TOOLS] ✗ Cannot connect to dash_api at {DASH_API_BASE_URL}: {e}")
+    except Exception as e:
+        import traceback
+        logger.error(f"[CHATBOT TOOLS] ✗ Failed to send notification: {e}")
+        logger.error(f"[CHATBOT TOOLS] Traceback: {traceback.format_exc()}")
 
 # --- Async Helper ---
 def run_async(coro):
@@ -270,6 +316,13 @@ async def _create_task_async(
         company_id=company_id
     )
     await history.insert()
+    
+    # Notify via WebSocket that chatbot created a task
+    await _notify_chatbot_db_change(
+        company_id,
+        "task_created",
+        {"task_id": str(new_task.id), "task_title": title, "assignee": assignee.name}
+    )
     
     return f"Task '{title}' created successfully and assigned to {assignee.name}."
 
@@ -744,6 +797,13 @@ async def _update_task_status_async(task_title: str, new_status: str, current_us
     )
     await history.insert()
     
+    # Notify via WebSocket that chatbot updated task status
+    await _notify_chatbot_db_change(
+        company_id,
+        "task_status_updated",
+        {"task_id": str(task.id), "task_title": task.title, "old_status": old_status, "new_status": mapped_status.value}
+    )
+    
     return f"Task '{task.title}' status updated to '{mapped_status.value}'."
 
 
@@ -797,6 +857,13 @@ async def _update_task_priority_async(task_title: str, new_priority: str, curren
     )
     await history.insert()
     
+    # Notify via WebSocket that chatbot updated task priority
+    await _notify_chatbot_db_change(
+        company_id,
+        "task_priority_updated",
+        {"task_id": str(task.id), "task_title": task.title, "old_priority": old_priority, "new_priority": mapped_priority.value}
+    )
+    
     return f"Task '{task.title}' priority updated to '{mapped_priority.value}'."
 
 
@@ -840,6 +907,13 @@ async def _update_task_project_async(task_title: str, project_name: str, current
         )
         await history.insert()
         
+        # Notify via WebSocket that chatbot unlinked task from project
+        await _notify_chatbot_db_change(
+            company_id,
+            "task_project_updated",
+            {"task_id": str(task.id), "task_title": task.title, "action": "unlinked", "old_project": old_project}
+        )
+        
         return f"Task '{task.title}' has been unlinked from project '{old_project}'."
     
     # Find the project by name
@@ -871,6 +945,13 @@ async def _update_task_project_async(task_title: str, project_name: str, current
     )
     await history.insert()
     
+    # Notify via WebSocket that chatbot updated task project
+    await _notify_chatbot_db_change(
+        company_id,
+        "task_project_updated",
+        {"task_id": str(task.id), "task_title": task.title, "old_project": old_project, "new_project": project.name}
+    )
+    
     if old_project == "No project":
         return f"Task '{task.title}' has been linked to project '{project.name}'."
     else:
@@ -901,6 +982,13 @@ async def _delete_task_async(task_title: str, current_user_id: str, company_id: 
     
     # Delete task
     await task.delete()
+    
+    # Notify via WebSocket that chatbot deleted a task
+    await _notify_chatbot_db_change(
+        company_id,
+        "task_deleted",
+        {"task_id": task_id, "task_title": actual_task_title}
+    )
     
     return f"Task '{actual_task_title}' deleted successfully."
 
@@ -1490,6 +1578,13 @@ async def _send_invitation_async(
     )
     
     await new_invitation.insert()
+    
+    # Notify via WebSocket that chatbot sent an invitation
+    await _notify_chatbot_db_change(
+        company_id,
+        "invitation_sent",
+        {"invitation_id": str(new_invitation.id), "invitee_email": invitee_email, "role": role}
+    )
     
     return f"""✅ **Invitation Sent Successfully!**
 
