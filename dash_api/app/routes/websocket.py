@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import logging
 import json
 
-from app.services.websocket import manager, WebSocketEventType, notify_chatbot_db_change
+from app.services.websocket import manager, WebSocketEventType, notify_chatbot_db_change, notify_user_invited
 from app.models.user import User
 from app.middleware.auth import get_current_user_optional
 from app.config import settings
@@ -20,6 +20,13 @@ class ChatbotNotificationRequest(BaseModel):
     company_id: str
     change_type: str
     details: dict = {}
+
+
+# Pydantic model for user invitation notification
+class InvitationNotificationRequest(BaseModel):
+    """Request model for invitation notification to a specific user."""
+    invitee_user_id: str
+    invitation_data: dict
 
 
 async def get_user_from_token(token: str) -> Optional[User]:
@@ -178,4 +185,40 @@ async def chatbot_notify(
         }
     except Exception as e:
         logger.error(f"[CHATBOT NOTIFY] Failed to send notification: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ws/invitation-notify")
+async def invitation_notify(
+    request: InvitationNotificationRequest,
+    x_internal_secret: str = Header(None, alias="X-Internal-Secret")
+):
+    """
+    HTTP endpoint for chatbot to send invitation notification to a specific user.
+    
+    This endpoint sends a USER_INVITED WebSocket event directly to the invitee,
+    allowing real-time update when admin sends an invitation via chatbot.
+    """
+    # Validate internal secret for security
+    expected_secret = getattr(settings, 'internal_api_secret', 'chatbot-internal-secret')
+    if x_internal_secret != expected_secret:
+        logger.warning(f"[INVITATION NOTIFY] Invalid or missing internal secret")
+    
+    logger.info(f"[INVITATION NOTIFY] Sending invitation notification to user: {request.invitee_user_id}")
+    logger.info(f"[INVITATION NOTIFY] Invitation data: {request.invitation_data}")
+    
+    try:
+        await notify_user_invited(request.invitation_data, request.invitee_user_id)
+        
+        # Check if user is online
+        is_online = manager.is_user_online(request.invitee_user_id)
+        
+        return {
+            "status": "success",
+            "message": "Invitation notification sent",
+            "invitee_user_id": request.invitee_user_id,
+            "user_online": is_online
+        }
+    except Exception as e:
+        logger.error(f"[INVITATION NOTIFY] Failed to send notification: {e}")
         raise HTTPException(status_code=500, detail=str(e))
