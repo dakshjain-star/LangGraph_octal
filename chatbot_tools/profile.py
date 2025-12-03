@@ -84,7 +84,7 @@ async def _update_profile_async(
                 import aiohttp
                 from chatbot_tools.helpers import DASH_API_BASE_URL
                 
-                webhook_url = f"{DASH_API_BASE_URL}/profile/webhook/notify-update"
+                webhook_url = f"{DASH_API_BASE_URL}/api/v1/profile/webhook/notify-update"
                 user_data = {
                     "id": str(updated_user["_id"]),
                     "name": updated_user.get("name"),
@@ -95,12 +95,18 @@ async def _update_profile_async(
                     "company_id": company_id,
                 }
                 
+                logger.info(f"[CHATBOT PROFILE] Sending webhook to: {webhook_url}")
+                logger.info(f"[CHATBOT PROFILE] User data: {user_data}")
+                
                 async with aiohttp.ClientSession() as session:
                     async with session.post(webhook_url, json=user_data) as resp:
-                        if resp.status != 200:
-                            logger.warning(f"WebSocket notification HTTP request failed: {resp.status}")
+                        if resp.status == 200:
+                            logger.info(f"[CHATBOT PROFILE] ✓ WebSocket notification sent successfully")
+                        else:
+                            resp_text = await resp.text()
+                            logger.warning(f"[CHATBOT PROFILE] WebSocket notification HTTP request failed: {resp.status} - {resp_text}")
             except Exception as ws_err:
-                logger.warning(f"WebSocket notification via HTTP failed: {ws_err}")
+                logger.warning(f"[CHATBOT PROFILE] WebSocket notification via HTTP failed: {ws_err}")
         
         # Also send chatbot DB change notification for general refresh
         await _notify_chatbot_db_change(
