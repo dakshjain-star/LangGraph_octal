@@ -8,6 +8,7 @@ from app.routes.dashboard import router as dashboard_router
 from app.routes.settings import router as settings_router
 from app.routes.invitations import router as invitations_router
 from app.routes.websocket import router as websocket_router
+from app.routes.profile import router as profile_router
 
 __all__ = [
     "auth_router",
@@ -18,5 +19,6 @@ __all__ = [
     "dashboard_router",
     "settings_router",
     "invitations_router",
-    "websocket_router"
+    "websocket_router",
+    "profile_router"
 ]

@@ -10,7 +10,8 @@ from langchain_core.messages import SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import ToolNode
 
-from chatbot_tools import tools
+from chatbot_tools import tools, create_profile_tools
+from model import get_database
 
 
 class AgentState(TypedDict):
@@ -20,12 +21,38 @@ class AgentState(TypedDict):
     company_id: Optional[str]
 
 
+# Context holders for profile tools (updated per request)
+_current_user_context: Dict[str, Any] = {}
+
+
+def _get_db():
+    """Get database instance for profile tools."""
+    return get_database()
+
+
+def _get_user_id():
+    """Get current user ID from context."""
+    return _current_user_context.get("user_id")
+
+
+def _get_company_id():
+    """Get current company ID from context."""
+    return _current_user_context.get("company_id")
+
+
+# Create profile tools with context getters
+profile_tools = create_profile_tools(_get_db, _get_user_id, _get_company_id)
+
+# Combine all tools
+all_tools = tools + profile_tools
+
+
 # --- INITIALIZE OLLAMA ---
 llm = ChatOllama(
     model="gpt-oss:120b-cloud",
     temperature=0,
     base_url="http://localhost:11434"
-).bind_tools(tools)
+).bind_tools(all_tools)
 
 
 def build_system_prompt(user_id: str, user_name: str, company_id: str) -> str:
@@ -161,6 +188,23 @@ When displaying projects, use a clean format:
 
 also Add a horizontal separator (---) between projects for clarity. also Leave a blank line between projects.
 
+**Profile Management:**
+
+1. **Viewing Profile:**
+   - Use 'get_my_profile' to show the user their current profile information
+   - Examples: "show my profile", "what's my email?", "view my account"
+
+2. **Updating Profile:**
+   - Use 'update_my_profile' for general profile updates (name, email, avatar URL)
+   - Use 'change_my_name' specifically for name changes
+   - Use 'set_my_avatar' to set a profile picture via URL
+   - Use 'remove_my_avatar' to clear their avatar
+   - Examples:
+     - "Change my name to John Smith"
+     - "Update my email to john@example.com"
+     - "Set my avatar to https://example.com/photo.jpg"
+     - "Remove my profile picture"
+
 ---
 
 **Important Rules:**
@@ -179,9 +223,18 @@ also Add a horizontal separator (---) between projects for clarity. also Leave a
 # --- LangGraph Nodes ---
 async def chatbot_node(state: AgentState):
     """Main chatbot node that processes messages."""
+    global _current_user_context
+    
     user_id = state.get("user_id", "")
     user_name = state.get("user_name", "User")
     company_id = state.get("company_id", "")
+    
+    # Update the user context for profile tools
+    _current_user_context = {
+        "user_id": user_id,
+        "user_name": user_name,
+        "company_id": company_id
+    }
 
     sys_msg = SystemMessage(content=build_system_prompt(user_id, user_name, company_id))
     messages = [sys_msg] + state["messages"]
@@ -189,7 +242,7 @@ async def chatbot_node(state: AgentState):
     return {"messages": [response]}
 
 
-tool_node = ToolNode(tools)
+tool_node = ToolNode(all_tools)
 
 
 # --- Graph Construction ---

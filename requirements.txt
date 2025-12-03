@@ -13,6 +13,7 @@ pydantic-settings
 fastapi
 uvicorn
 python-multipart
+aiohttp
 
 # WebSocket Client (for real-time updates)
 websockets

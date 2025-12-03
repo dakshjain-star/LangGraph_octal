@@ -168,6 +168,7 @@ class WebSocketEventType:
     USER_INVITED = "USER_INVITED"
     USER_JOINED = "USER_JOINED"
     USER_UPDATED = "USER_UPDATED"
+    USER_PROFILE_UPDATED = "USER_PROFILE_UPDATED"
     
     # Comment events
     COMMENT_ADDED = "COMMENT_ADDED"
@@ -385,3 +386,33 @@ async def notify_chatbot_db_change(company_id: str, change_type: str, details: d
     )
     
     logger.info(f"[CHATBOT] Notification sent successfully for {change_type}")
+
+
+async def notify_user_profile_updated(user_data: dict, company_id: str):
+    """Notify all users in a company when a user's profile is updated."""
+    logger.info(f"[PROFILE] Notifying company {company_id} about user profile update: {user_data.get('id')}")
+    
+    # Serialize datetime objects for JSON
+    serialized_data = {}
+    for key, value in user_data.items():
+        if hasattr(value, 'isoformat'):
+            serialized_data[key] = value.isoformat()
+        elif hasattr(value, 'value'):  # Enum
+            serialized_data[key] = value.value
+        else:
+            serialized_data[key] = value
+    
+    message = {
+        "type": WebSocketEventType.USER_PROFILE_UPDATED,
+        "payload": {
+            **serialized_data,
+            "message": f"User {user_data.get('name', 'Unknown')} updated their profile"
+        }
+    }
+    
+    await manager.broadcast_to_company(
+        company_id,
+        message
+    )
+    
+    logger.info(f"[PROFILE] User profile update notification sent for user {user_data.get('id')}")
