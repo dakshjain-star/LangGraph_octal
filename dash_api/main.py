@@ -67,12 +67,17 @@ app = FastAPI(
 )
 
 # CORS Middleware
+cors_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+cors_headers = ["Content-Type", "Authorization"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=settings.cors_credentials,
-    allow_methods=["*"] if settings.cors_methods == "*" else settings.cors_methods.split(","),
-    allow_headers=["*"] if settings.cors_headers == "*" else settings.cors_headers.split(","),
+    allow_methods=cors_methods,
+    allow_headers=cors_headers,
+    expose_headers=["Content-Type", "Authorization"],
+    max_age=600,
 )
 
 # Setup exception handlers

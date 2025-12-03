@@ -30,10 +30,10 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # CORS
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
     cors_credentials: bool = True
-    cors_methods: str = "*"
-    cors_headers: str = "*"
+    cors_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    cors_headers: str = "Content-Type,Authorization"
     
     # Email (SMTP)
     smtp_host: str = "smtp.gmail.com"
