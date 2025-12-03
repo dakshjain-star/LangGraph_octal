@@ -926,6 +926,62 @@ async def _get_task_comments_async(task_title: str, current_user_id: str, compan
     return result
 
 
+async def _post_task_comment_async(task_title: str, content: str, current_user_id: str, company_id: str):
+    """Async implementation to post a comment on a task."""
+    from dash_api.app.models.task import Task
+    from dash_api.app.models.comment import Comment
+    from dash_api.app.models.user import User
+    from dash_api.app.models.task_history import TaskHistory, HistoryActionType
+
+    if not content or not content.strip():
+        return "Error: Comment content cannot be empty."
+
+    task = await _find_task_by_title_async(task_title, current_user_id, company_id)
+    if not task:
+        return f"Error: Task '{task_title}' not found."
+
+    # Verify the task belongs to user's company
+    if task.company_id != company_id:
+        return f"Error: Task not found in your company."
+
+    # Resolve user
+    current_user = await User.get(current_user_id)
+    if not current_user:
+        return "Error: Current user not found."
+
+    # Create comment
+    comment = Comment(
+        task_id=str(task.id),
+        user_id=current_user_id,
+        user_name=current_user.name,
+        content=content.strip()
+    )
+    await comment.insert()
+
+    # Optionally create a history entry for comment (uses generic UPDATED action)
+    history = TaskHistory(
+        task_id=str(task.id),
+        action=HistoryActionType.UPDATED,
+        field_name="comment",
+        old_value=None,
+        new_value=(content.strip()[:200] + ("..." if len(content.strip()) > 200 else "")),
+        user_id=current_user_id,
+        user_name=current_user.name,
+        user_avatar=current_user.avatar_url if hasattr(current_user, 'avatar_url') else None,
+        company_id=company_id
+    )
+    await history.insert()
+
+    # Notify via WebSocket that a comment was added
+    await _notify_chatbot_db_change(
+        company_id,
+        "comment_added",
+        {"task_id": str(task.id), "task_title": task.title, "comment_id": str(comment.id), "user_name": current_user.name, "content": content.strip()[:200]}
+    )
+
+    return f"Comment added to task '{task.title}' by {current_user.name}."
+
+
 # --- LangGraph Task Tools (Sync Wrappers) ---
 
 @tool
@@ -1161,6 +1217,19 @@ def get_task_comments(task_title: str, current_user_id: str, company_id: str):
     return run_async(_get_task_comments_async(task_title, current_user_id, company_id))
 
 
+@tool
+def post_task_comment(task_title: str, content: str, current_user_id: str, company_id: str):
+    """Post a comment to a task.
+
+    Parameters:
+    - task_title: Title of the task to comment on
+    - content: The comment text
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+    """
+    return run_async(_post_task_comment_async(task_title, content, current_user_id, company_id))
+
+
 # Export all task tools
 task_tools = [
     create_task,
@@ -1179,4 +1248,5 @@ task_tools = [
     get_task_collaborators,
     get_task_history,
     get_task_comments,
+    post_task_comment,
 ]

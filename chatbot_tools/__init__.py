@@ -57,6 +57,7 @@ from .tasks import (
     get_task_collaborators,
     get_task_history,
     get_task_comments,
+    post_task_comment,
 )
 
 # Import project tools
@@ -74,6 +75,7 @@ from .projects import (
     remove_task_from_project,
     get_project_tasks,
     create_project,
+    get_project_due_date,
 )
 
 # Import invitation tools
@@ -83,6 +85,8 @@ from .invitations import (
     list_received_invitations,
     list_sent_invitations,
 )
+
+
 
 # Combined list of all tools for export (matching original tools.py order)
 tools = [
@@ -102,16 +106,19 @@ tools = [
     # Project basic tools
     list_projects,
     get_project_info,
+    get_project_due_date,
     create_project,
     # Task stats/info tools
     get_task_stats,
     get_task_collaborators,
     get_task_history,
     get_task_comments,
+    post_task_comment,
     # Invitation tools
     send_invitation,
     list_received_invitations,
     list_sent_invitations,
+    # Profile tools (removed: update_user_via_chatbot, upload_avatar_file)
     # Project update tools
     update_project_name,
     update_project_status,
@@ -155,6 +162,7 @@ __all__ = [
     'get_task_collaborators',
     'get_task_history',
     'get_task_comments',
+    'post_task_comment',
     
     # Project tools
     'list_projects',
@@ -169,9 +177,13 @@ __all__ = [
     'add_task_to_project',
     'remove_task_from_project',
     'get_project_tasks',
+    'get_project_due_date',
     
     # Invitation tools
     'send_invitation',
     'list_received_invitations',
     'list_sent_invitations',
+    # Profile tools
+    'update_user_via_chatbot',
+    'upload_avatar_file',
 ]

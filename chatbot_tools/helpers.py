@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # dash_api base URL (where WebSocket connections are managed)
-DASH_API_BASE_URL = os.environ.get("DASH_API_URL", "http://localhost:8000")
+DASH_API_BASE_URL = os.environ.get("DASH_API_URL", "http://localhost:8001")
 
 
 def set_main_loop(loop: asyncio.AbstractEventLoop):
@@ -33,7 +33,7 @@ def get_main_loop() -> Optional[asyncio.AbstractEventLoop]:
 async def _notify_chatbot_db_change(company_id: str, change_type: str, details: dict = None):
     """Send WebSocket notification when chatbot makes a DB change.
     
-    This makes an HTTP request to the dash_api server (port 8000) to trigger
+    This makes an HTTP request to the dash_api server (port 8001) to trigger
     the WebSocket broadcast. This is necessary because the chatbot runs on
     a separate process (port 8081) and doesn't share the WebSocket connection
     manager with dash_api.
@@ -75,7 +75,7 @@ async def _notify_chatbot_db_change(company_id: str, change_type: str, details: 
 async def _notify_invitation_to_user(invitee_user_id: str, invitation_data: dict):
     """Send WebSocket notification directly to a specific user when they receive an invitation.
     
-    This makes an HTTP request to the dash_api server (port 8000) to trigger
+    This makes an HTTP request to the dash_api server (port 8001) to trigger
     a USER_INVITED WebSocket event to the specific user.
     """
     try:

@@ -20,7 +20,7 @@ async def _init_websocket_handlers(current_user: Dict[str, Any], credentials):
         jwt_token=jwt_token,
         user_id=user_id,
         company_id=company_id,
-        api_url="http://localhost:8000"
+        api_url="http://localhost:8001"
     )
 
     # Wait briefly for connection to establish

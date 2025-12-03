@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     
     # Server
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8001
     
     # MongoDB
     mongodb_url: str = "mongodb+srv://octaldaksh:octal123@cluster0.5xt6n.mongodb.net/"

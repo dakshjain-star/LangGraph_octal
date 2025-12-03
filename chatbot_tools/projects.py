@@ -518,6 +518,27 @@ async def _get_project_tasks_async(project_name: str, current_user_id: str, comp
     return result
 
 
+async def _get_project_due_date_async(project_name: str, current_user_id: str, company_id: str):
+    """Async implementation to fetch a project's due date."""
+    from dash_api.app.models.project import Project
+
+    project = await _find_project_by_name_async(project_name, company_id)
+    if not project:
+        projects_list = await _list_projects_async(current_user_id, company_id)
+        return f"Error: Could not find a project named '{project_name}'.\n\nHere are the available projects:\n{projects_list}"
+
+    if not project.due_date:
+        return f"Project '{project.name}' has no deadline set."
+
+    # Format due date to YYYY-MM-DD
+    try:
+        due_str = project.due_date.strftime('%Y-%m-%d') if hasattr(project.due_date, 'strftime') else str(project.due_date)
+    except Exception:
+        due_str = str(project.due_date)
+
+    return f"Project '{project.name}' deadline: {due_str}"
+
+
 # --- LangGraph Project Tools (Sync Wrappers) ---
 
 @tool
@@ -686,8 +707,27 @@ def get_project_tasks(project_name: str, current_user_id: str, company_id: str):
     - company_id: Current company ID (auto-populated)
     
     Example: "Show all tasks in project 'Alpha'"
+
+    This tool returns task-level information (including each task's due date).
+    Do NOT use this tool when the user specifically asks for the project's deadline.
+    To fetch the project-level deadline, use the `get_project_due_date` tool instead.
     """
     return run_async(_get_project_tasks_async(project_name, current_user_id, company_id))
+
+
+@tool
+def get_project_due_date(project_name: str, current_user_id: str, company_id: str):
+    """Get the deadline/due date of a project.
+
+    Parameters:
+    - project_name: Name of the project to query
+    - current_user_id: Current logged-in user ID (auto-populated)
+    - company_id: Current company ID (auto-populated)
+
+    This tool returns ONLY the project's deadline (project.due_date).
+    Use this when the user explicitly asks for the project's due date/deadline.
+    """
+    return run_async(_get_project_due_date_async(project_name, current_user_id, company_id))
 
 
 # Export all project tools
@@ -704,4 +744,5 @@ project_tools = [
     add_task_to_project,
     remove_task_from_project,
     get_project_tasks,
+    get_project_due_date,
 ]

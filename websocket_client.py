@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class WebSocketUpdateHandler:
     """Handles real-time WebSocket updates from the API."""
     
-    def __init__(self, jwt_token: str, user_id: str, company_id: str, api_url: str = "http://localhost:8000"):
+    def __init__(self, jwt_token: str, user_id: str, company_id: str, api_url: str = "http://localhost:8001"):
         """
         Initialize the WebSocket client handler.
         
@@ -46,6 +46,8 @@ class WebSocketUpdateHandler:
             "TASK_CREATED": [],
             "TASK_DELETED": [],
             "TASK_ASSIGNED": [],
+            "USER_UPDATED": [],
+            "CHATBOT_DB_CHANGE": [],
         }
         
         # Data cache
@@ -261,6 +263,25 @@ class WebSocketUpdateHandler:
                 "task": payload,
                 "timestamp": timestamp
             })
+
+        elif message_type == "USER_UPDATED":
+            # A user in the company has been updated (name/avatar/etc.)
+            user_id = payload.get("user_id") or payload.get("id")
+            logger.info(f"User updated: {user_id}")
+            await self._emit_event("USER_UPDATED", {
+                "user_id": user_id,
+                "payload": payload,
+                "timestamp": timestamp
+            })
+
+        elif message_type == "CHATBOT_DB_CHANGE":
+            # Generic chatbot-sourced DB change notification
+            logger.info(f"Chatbot DB change: {payload.get('change_type')}")
+            await self._emit_event("CHATBOT_DB_CHANGE", {
+                "change_type": payload.get("change_type"),
+                "details": payload.get("details", {}),
+                "timestamp": timestamp
+            })
         
         elif message_type == "PONG":
             logger.debug("Received PONG from server")
@@ -331,7 +352,7 @@ async def get_or_create_ws_handler(
     jwt_token: str,
     user_id: str,
     company_id: str,
-    api_url: str = "http://localhost:8000"
+    api_url: str = "http://localhost:8001"
 ) -> WebSocketUpdateHandler:
     """Get or create a WebSocket handler for a user."""
     if user_id not in _ws_handlers:
