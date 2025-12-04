@@ -18,11 +18,7 @@ from app.schemas.task_history import TaskHistoryResponse
 from app.services.websocket import (
     notify_task_created, notify_task_updated, 
     notify_task_assigned, notify_task_deleted,
-<<<<<<< HEAD
     notify_task_unassigned
-=======
-    notify_task_history_updated, notify_task_collaborators_updated
->>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
 )
 
 
@@ -550,20 +546,6 @@ class TaskController:
         
         await task.insert()
         
-<<<<<<< HEAD
-=======
-        # Log task creation in history
-        await create_task_history(
-            task_id=str(task.id),
-            action=HistoryActionType.CREATED,
-            user=current_user,
-            company_id=company_id,
-            field_name=None,
-            old_value=None,
-            new_value=task.title
-        )
-        
->>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
         task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -875,13 +857,8 @@ class TaskController:
                 detail="Task not found"
             )
         
-<<<<<<< HEAD
         # Store original assignee for notification
         original_assignee_id = task.assignee_id
-=======
-        # Store old assignee for history
-        old_assignee_name = task.assignee_name
->>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
         
         # Check company access - allow access from any of user's companies
         user_company_ids = current_user.get_effective_company_ids()
@@ -913,21 +890,6 @@ class TaskController:
         task.updated_at = datetime.utcnow()
         await task.save()
         
-<<<<<<< HEAD
-=======
-        # Log assignee change to history
-        if old_assignee_name != assignee.name:
-            await create_task_history(
-                task_id=str(task.id),
-                action=HistoryActionType.ASSIGNEE_CHANGED,
-                user=current_user,
-                company_id=task.company_id,
-                field_name="assignee",
-                old_value=old_assignee_name,
-                new_value=assignee.name
-            )
-        
->>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
         task_response = TaskResponse(
             id=str(task.id),
             title=task.title,
@@ -948,7 +910,6 @@ class TaskController:
             updated_at=task.updated_at,
             is_overdue=is_task_overdue(task.due_date, task.status)
         )
-<<<<<<< HEAD
         
         # Send WebSocket notifications
         task_data = task_response.model_dump()
@@ -971,20 +932,6 @@ class TaskController:
         if task.assignee_id != str(current_user.id):
             await notify_task_assigned(task_data, task.assignee_id, str(current_user.id))
         
-=======
-
-        task_data = task_response.model_dump()
-        for field in ("due_date", "created_at", "updated_at"):
-            if task_data.get(field) and hasattr(task_data[field], "isoformat"):
-                task_data[field] = task_data[field].isoformat()
-
-        await notify_task_updated(task_data, task.company_id, str(current_user.id))
-
-        # Notify the newly assigned user so they receive task card instantly
-        if task.assignee_id:
-            await notify_task_assigned(task_data, task.assignee_id, str(current_user.id))
-
->>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
         return task_response
     
     @staticmethod
