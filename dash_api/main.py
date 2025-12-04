@@ -67,15 +67,13 @@ app = FastAPI(
 )
 
 # CORS Middleware
-cors_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-cors_headers = ["Content-Type", "Authorization"]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=settings.cors_credentials,
+    allow_methods=settings.cors_methods.split(","),
+    allow_headers=settings.cors_headers.split(","),
+    allow_origin_regex=settings.cors_allow_origin_regex,
 )
 
 
