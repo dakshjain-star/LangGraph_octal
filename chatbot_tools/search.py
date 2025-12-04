@@ -7,7 +7,8 @@ import sys
 import os
 
 # Add dash_api to path
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dash_api'))
+# Add parent directory to path to allow importing dash_api
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 logger = logging.getLogger(__name__)
 

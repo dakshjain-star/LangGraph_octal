@@ -17,7 +17,8 @@ import sys
 import os
 
 # Add dash_api to path for all modules
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dash_api'))
+# Add parent directory to path to allow importing dash_api
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import core helpers
 from .helpers import (
