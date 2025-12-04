@@ -1,14 +1,19 @@
 """Core chatbot setup: LLM, system prompt builder, state graph, nodes."""
+import os
 import random
 from datetime import datetime
 from typing import Annotated, Optional, Dict, Any
 from typing_extensions import TypedDict
+from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import SystemMessage
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import ToolNode
+
+# Load environment variables from .env file
+load_dotenv()
 
 from chatbot_tools import tools, create_profile_tools
 from model import get_database
@@ -47,11 +52,11 @@ profile_tools = create_profile_tools(_get_db, _get_user_id, _get_company_id)
 all_tools = tools + profile_tools
 
 
-# --- INITIALIZE OLLAMA ---
-llm = ChatOllama(
-    model="gpt-oss:120b-cloud",
+# --- INITIALIZE GEMINI ---
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
     temperature=0,
-    base_url="http://localhost:11434"
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
 ).bind_tools(all_tools)
 
 

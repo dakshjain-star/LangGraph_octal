@@ -1,7 +1,8 @@
 # LangGraph Chatbot Dependencies
 langgraph 
 langchain-core
-langchain-ollama
+langchain-google-genai
+python-dotenv
 
 # MongoDB (Beanie ODM - same as dash_api)
 motor
