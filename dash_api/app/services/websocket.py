@@ -169,10 +169,15 @@ class WebSocketEventType:
     USER_INVITED = "USER_INVITED"
     USER_JOINED = "USER_JOINED"
     USER_UPDATED = "USER_UPDATED"
+    USER_PROFILE_UPDATED = "USER_PROFILE_UPDATED"
     
     # Comment events
     COMMENT_ADDED = "COMMENT_ADDED"
     COMMENT_DELETED = "COMMENT_DELETED"
+    
+    # Task History events
+    TASK_HISTORY_UPDATED = "TASK_HISTORY_UPDATED"
+    TASK_COLLABORATORS_UPDATED = "TASK_COLLABORATORS_UPDATED"
     
     # Invitation events
     INVITATION_RECEIVED = "INVITATION_RECEIVED"
@@ -180,6 +185,9 @@ class WebSocketEventType:
     
     # Notification events
     NOTIFICATION = "NOTIFICATION"
+    
+    # Chatbot events
+    CHATBOT_DB_CHANGE = "CHATBOT_DB_CHANGE"
     
     # System events
     CONNECTION_ESTABLISHED = "CONNECTION_ESTABLISHED"
@@ -194,8 +202,7 @@ async def notify_task_created(task_data: dict, company_id: str, creator_id: str 
         {
             "type": WebSocketEventType.TASK_CREATED,
             "payload": task_data
-        },
-        exclude_user=creator_id
+        }
     )
 
 
@@ -206,8 +213,7 @@ async def notify_task_updated(task_data: dict, company_id: str, updater_id: str 
         {
             "type": WebSocketEventType.TASK_UPDATED,
             "payload": task_data
-        },
-        exclude_user=updater_id
+        }
     )
 
 
@@ -248,8 +254,35 @@ async def notify_task_deleted(task_id: str, company_id: str, deleter_id: str = N
         {
             "type": WebSocketEventType.TASK_DELETED,
             "payload": {"task_id": task_id}
-        },
-        exclude_user=deleter_id
+        }
+    )
+
+
+async def notify_task_history_updated(task_id: str, history_data: dict, company_id: str):
+    """Notify relevant users when task history is updated."""
+    await manager.broadcast_to_company(
+        company_id,
+        {
+            "type": WebSocketEventType.TASK_HISTORY_UPDATED,
+            "payload": {
+                "task_id": task_id,
+                "history_entry": history_data
+            }
+        }
+    )
+
+
+async def notify_task_collaborators_updated(task_id: str, collaborators_data: dict, company_id: str, updater_id: str = None):
+    """Notify relevant users when task collaborators are updated."""
+    await manager.broadcast_to_company(
+        company_id,
+        {
+            "type": WebSocketEventType.TASK_COLLABORATORS_UPDATED,
+            "payload": {
+                "task_id": task_id,
+                "collaborators": collaborators_data
+            }
+        }
     )
 
 
@@ -260,8 +293,7 @@ async def notify_project_created(project_data: dict, company_id: str, creator_id
         {
             "type": WebSocketEventType.PROJECT_CREATED,
             "payload": project_data
-        },
-        exclude_user=creator_id
+        }
     )
 
 
@@ -272,8 +304,7 @@ async def notify_project_updated(project_data: dict, company_id: str, updater_id
         {
             "type": WebSocketEventType.PROJECT_UPDATED,
             "payload": project_data
-        },
-        exclude_user=updater_id
+        }
     )
 
 
@@ -284,8 +315,7 @@ async def notify_project_deleted(project_id: str, company_id: str, deleter_id: s
         {
             "type": WebSocketEventType.PROJECT_DELETED,
             "payload": {"project_id": project_id}
-        },
-        exclude_user=deleter_id
+        }
     )
 
 
@@ -313,8 +343,7 @@ async def notify_comment_added(comment_data: dict, task_id: str, company_id: str
                 **comment_data,
                 "task_id": task_id
             }
-        },
-        exclude_user=commenter_id
+        }
     )
 
 
@@ -362,3 +391,59 @@ async def notify_user_joined(user_data: dict, company_id: str):
             }
         }
     )
+
+
+async def notify_chatbot_db_change(company_id: str, change_type: str, details: dict = None):
+    """Notify all users in a company when chatbot makes a database change."""
+    logger.info(f"[CHATBOT] Notifying company {company_id} about DB change: {change_type}")
+    logger.info(f"[CHATBOT] Change details: {details}")
+    
+    message = {
+        "type": WebSocketEventType.CHATBOT_DB_CHANGE,
+        "payload": {
+            "change_type": change_type,
+            "details": details or {},
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"Chatbot made a change: {change_type}"
+        }
+    }
+    
+    logger.info(f"[CHATBOT] Broadcasting message: {message}")
+    logger.info(f"[CHATBOT] Company users: {manager.company_users.get(company_id, set())}")
+    
+    await manager.broadcast_to_company(
+        company_id,
+        message
+    )
+    
+    logger.info(f"[CHATBOT] Notification sent successfully for {change_type}")
+
+
+async def notify_user_profile_updated(user_data: dict, company_id: str):
+    """Notify all users in a company when a user's profile is updated."""
+    logger.info(f"[PROFILE] Notifying company {company_id} about user profile update: {user_data.get('id')}")
+    
+    # Serialize datetime objects for JSON
+    serialized_data = {}
+    for key, value in user_data.items():
+        if hasattr(value, 'isoformat'):
+            serialized_data[key] = value.isoformat()
+        elif hasattr(value, 'value'):  # Enum
+            serialized_data[key] = value.value
+        else:
+            serialized_data[key] = value
+    
+    message = {
+        "type": WebSocketEventType.USER_PROFILE_UPDATED,
+        "payload": {
+            **serialized_data,
+            "message": f"User {user_data.get('name', 'Unknown')} updated their profile"
+        }
+    }
+    
+    await manager.broadcast_to_company(
+        company_id,
+        message
+    )
+    
+    logger.info(f"[PROFILE] User profile update notification sent for user {user_data.get('id')}")

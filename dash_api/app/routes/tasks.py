@@ -12,6 +12,7 @@ from app.schemas.task import (
     TaskPriority,
     TaskWithComments
 )
+from app.schemas.task_history import TaskHistoryListResponse
 from app.schemas.auth import MessageResponse
 from app.controllers.task_controller import TaskController
 from app.middleware.auth import get_current_user, require_member_or_admin
@@ -270,3 +271,28 @@ async def delete_task(
     This will also delete all associated comments.
     """
     return await TaskController.delete_task(task_id, current_user)
+
+
+@router.get(
+    "/{task_id}/history",
+    response_model=TaskHistoryListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get task history",
+    description="Get the history of all changes made to a task"
+)
+async def get_task_history(
+    task_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the history of all changes made to a task:
+    - **task_id**: The ID of the task to get history for
+    - **skip**: Number of records to skip (pagination)
+    - **limit**: Maximum number of records to return
+    
+    Returns a list of history entries with timestamps in IST.
+    Both task assignees and task creators can view history.
+    """
+    return await TaskController.get_task_history(task_id, current_user, skip, limit)

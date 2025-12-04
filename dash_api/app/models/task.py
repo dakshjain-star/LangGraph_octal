@@ -1,7 +1,7 @@
 """Task model for MongoDB."""
 from beanie import Document
-from pydantic import Field
-from typing import Optional
+from pydantic import Field, BaseModel
+from typing import Optional, List
 from datetime import datetime, date
 from enum import Enum
 
@@ -21,6 +21,13 @@ class TaskPriority(str, Enum):
     HIGH = "High"
 
 
+class Collaborator(BaseModel):
+    """Collaborator info embedded in task."""
+    user_id: str
+    user_name: str
+    user_avatar: Optional[str] = None
+
+
 class Task(Document):
     """Task document model for MongoDB."""
     
@@ -34,6 +41,9 @@ class Task(Document):
     assignee_id: str = Field(...)
     assignee_name: str = Field(...)
     assignee_avatar: Optional[str] = None
+    
+    # Collaborators (multiple users from the same company)
+    collaborators: List[Collaborator] = Field(default_factory=list)
     
     # Creator info
     creator_id: str = Field(...)

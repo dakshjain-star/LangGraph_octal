@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     
     # Server
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8001
     
     # MongoDB
     mongodb_url: str = "mongodb+srv://octaldaksh:octal123@cluster0.5xt6n.mongodb.net/"
@@ -30,10 +30,14 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # CORS
+<<<<<<< HEAD
     cors_origins: str = "https://nexus-esw7.onrender.com,http://localhost:3000,http://localhost:5173"
+=======
+    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+>>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
     cors_credentials: bool = True
-    cors_methods: str = "*"
-    cors_headers: str = "*"
+    cors_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    cors_headers: str = "Content-Type,Authorization"
     
     # Email (SMTP)
     smtp_host: str = "smtp.gmail.com"
@@ -56,6 +60,9 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = "INFO"
+    
+    # Internal API secret for chatbot communication
+    internal_api_secret: str = "chatbot-internal-secret"
     
     model_config = SettingsConfigDict(
         env_file=".env",

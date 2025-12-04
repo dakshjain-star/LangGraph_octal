@@ -1,8 +1,10 @@
 """Main FastAPI application entry point."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import logging
 import uvicorn
+import os
 
 from app.config import settings
 from app.database import connect_to_mongo, close_mongo_connection
@@ -16,7 +18,8 @@ from app.routes import (
     dashboard_router,
     settings_router,
     invitations_router,
-    websocket_router
+    websocket_router,
+    profile_router
 )
 
 # Configure logging
@@ -64,12 +67,17 @@ app = FastAPI(
 )
 
 # CORS Middleware
+cors_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+cors_headers = ["Content-Type", "Authorization"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=settings.cors_credentials,
-    allow_methods=["*"] if settings.cors_methods == "*" else settings.cors_methods.split(","),
-    allow_headers=["*"] if settings.cors_headers == "*" else settings.cors_headers.split(","),
+    allow_methods=cors_methods,
+    allow_headers=cors_headers,
+    expose_headers=["Content-Type", "Authorization"],
+    max_age=600,
 )
 
 # Setup exception handlers
@@ -95,6 +103,7 @@ async def shutdown_event():
 # Include routers
 app.include_router(auth_router, prefix=f"{settings.api_prefix}/auth", tags=["Authentication"])
 app.include_router(users_router, prefix=f"{settings.api_prefix}/users", tags=["Users"])
+app.include_router(profile_router, prefix=f"{settings.api_prefix}/profile", tags=["Profile"])
 app.include_router(projects_router, prefix=f"{settings.api_prefix}/projects", tags=["Projects"])
 app.include_router(tasks_router, prefix=f"{settings.api_prefix}/tasks", tags=["Tasks"])
 app.include_router(comments_router, prefix=f"{settings.api_prefix}", tags=["Comments"])
@@ -102,6 +111,11 @@ app.include_router(dashboard_router, prefix=f"{settings.api_prefix}/dashboard", 
 app.include_router(settings_router, prefix=f"{settings.api_prefix}/settings", tags=["Settings"])
 app.include_router(invitations_router, prefix=f"{settings.api_prefix}/invitations", tags=["Invitations"])
 app.include_router(websocket_router, prefix=f"{settings.api_prefix}", tags=["WebSocket"])
+
+# Mount static files for uploaded avatars
+uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(os.path.join(uploads_dir, "avatars"), exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 
 # Root endpoint

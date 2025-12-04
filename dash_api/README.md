@@ -146,16 +146,16 @@ dash_api/
 6. **Run the application**
    ```bash
    # Development mode with auto-reload
-   uvicorn main:app --reload --host 0.0.0.0 --port 8000
+   uvicorn main:app --reload --host 0.0.0.0 --port 8001
    
    # Or using Python
    python main.py
    ```
 
 7. **Access the API**
-   - API: http://localhost:8000
-   - Swagger UI: http://localhost:8000/docs
-   - ReDoc: http://localhost:8000/redoc
+   - API: http://localhost:8001
+   - Swagger UI: http://localhost:8001/docs
+   - ReDoc: http://localhost:8001/redoc
 
 ## API Endpoints
 
@@ -277,7 +277,7 @@ The following indexes are created automatically:
 ### Run with Gunicorn
 ```bash
 pip install gunicorn
-gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8001
 ```
 
 ### Docker (Optional)
@@ -287,7 +287,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
 ```
 
 ## Contributing

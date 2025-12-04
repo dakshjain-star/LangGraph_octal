@@ -13,6 +13,7 @@ const ChatInterface = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
   const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -22,12 +23,22 @@ const ChatInterface = ({ user, onLogout }) => {
     scrollToBottom();
   }, [messages]);
 
+  // Auto-resize textarea when input changes
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    // reset height to measure scrollHeight correctly
+    ta.style.height = 'auto';
+    const newHeight = Math.min(ta.scrollHeight, 192); // limit around 48 * 4 = 192px (max-h-48)
+    ta.style.height = `${newHeight}px`;
+  }, [input]);
+
   const handleResetChat = async () => {
     if (loading || resetting) return;
     setResetting(true);
 
     try {
-      await axios.post('http://localhost:8080/reset_chat', {
+      await axios.post('http://localhost:8081/reset_chat', {
         token: user.token,
       });
     } catch (err) {
@@ -58,7 +69,7 @@ const ChatInterface = ({ user, onLogout }) => {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://localhost:8080/chat', {
+      const res = await axios.post('http://localhost:8081/chat', {
         message: userMsg,
         token: user.token
       });
@@ -169,18 +180,29 @@ const ChatInterface = ({ user, onLogout }) => {
       {/* Input Area */}
       <div className="p-4 bg-secondary border-t border-slate-700">
         <form onSubmit={handleSend} className="max-w-4xl mx-auto relative">
-          <input
-            type="text"
+          {/* Toolbar removed - keep only textarea for newline support */}
+          <textarea
+            ref={(el) => textareaRef.current = el}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sends message, Shift+Enter inserts newline
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend(e);
+              }
+            }}
             placeholder="Type your message..."
-            className="w-full bg-slate-800 border border-slate-700 rounded-xl py-4 pl-6 pr-14 text-white focus:outline-none focus:ring-2 focus:ring-accent transition-all shadow-inner"
+            className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3 pl-4 pr-14 text-white focus:outline-none focus:ring-2 focus:ring-accent transition-all shadow-inner resize-none overflow-auto max-h-48"
             disabled={loading}
+            rows={2}
           />
+
           <button
             type="submit"
             disabled={!input.trim() || loading}
             className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 bg-accent hover:bg-blue-600 text-white rounded-lg transition-all disabled:opacity-50 disabled:hover:bg-accent"
+            title="Send (Enter)"
           >
             <Send className="w-5 h-5" />
           </button>

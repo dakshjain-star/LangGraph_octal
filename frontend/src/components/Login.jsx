@@ -15,7 +15,7 @@ const Login = ({ onLogin }) => {
     setError('');
 
     try {
-      const res = await axios.post('http://localhost:8080/login', {
+      const res = await axios.post('http://localhost:8081/login', {
         email,
         password
       });

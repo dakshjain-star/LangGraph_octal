@@ -1,12 +1,26 @@
-pymongo
+# LangGraph Chatbot Dependencies
 langgraph 
-langchain-openai 
-pydantic 
-bcrypt
-streamlit
-uvicorn
-fastapi
-python-multipart
+langchain-core
 langchain-ollama
-PyJWT
+
+# MongoDB (Beanie ODM - same as dash_api)
+motor
+beanie
+pydantic
+pydantic-settings
+
+# FastAPI and Web
+fastapi
+uvicorn
+python-multipart
+aiohttp
+
+# WebSocket Client (for real-time updates)
+websockets
+
+# Authentication (same as dash_api)
 python-jose[cryptography]
+passlib[bcrypt]
+
+# Utilities
+bcrypt
