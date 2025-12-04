@@ -11,9 +11,9 @@ import sys
 # Keep original import path behavior for `dash_api`
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'dash_api'))
 
-from chatbot import api_app
+from chatbot.endpoints import api_app
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:api_app", host="0.0.0.0", port=8081, reload=True)
+    uvicorn.run(api_app, host="0.0.0.0", port=8000, reload=False, workers=1)
