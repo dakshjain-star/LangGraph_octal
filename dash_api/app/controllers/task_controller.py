@@ -18,7 +18,8 @@ from app.schemas.task_history import TaskHistoryResponse
 from app.services.websocket import (
     notify_task_created, notify_task_updated, 
     notify_task_assigned, notify_task_deleted,
-    notify_task_unassigned
+    notify_task_unassigned, notify_task_history_updated,
+    notify_task_collaborators_updated
 )
 
 
