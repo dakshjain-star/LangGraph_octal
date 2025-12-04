@@ -27,3 +27,4 @@ bcrypt
 email-validator
 httpx
 aiosmtplib
+jinja2
