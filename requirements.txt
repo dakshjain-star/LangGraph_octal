@@ -26,3 +26,4 @@ passlib[bcrypt]
 bcrypt
 email-validator
 httpx
+aiosmtplib
