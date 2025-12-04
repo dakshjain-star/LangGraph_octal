@@ -30,7 +30,16 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # CORS
-    cors_origins: str = "https://nexus-esw7.onrender.com,http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+    # Comma-separated list of exact origins allowed.
+    # You can override this via environment variable CORS_ORIGINS
+    cors_origins: str = (
+        "https://nexus-esw7.onrender.com,"
+        "http://localhost:3000,http://localhost:5173,"
+        "http://127.0.0.1:3000,http://127.0.0.1:5173"
+    )
+    # Regex to match whole Render domain (and subdomains) in production if needed
+    # Override with CORS_ALLOW_ORIGIN_REGEX env var when deploying to other hosts
+    cors_allow_origin_regex: str = r"^https?:\/\/(.+\.)?onrender\.com$"
     cors_credentials: bool = True
     cors_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
     cors_headers: str = "Content-Type,Authorization"

@@ -51,9 +51,10 @@ api_app.add_middleware(
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
     ],
+    allow_origin_regex=r"^https?:\/\/(.+\.)?onrender\.com$",
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 
@@ -151,15 +152,46 @@ async def chat(
         # Update session with result
         session["messages"] = result["messages"]
 
+        # Helper to normalize message content to plain text
+        def _to_text(content: Any) -> str:
+            try:
+                # LangChain/OpenAI style: list of content parts
+                if isinstance(content, list):
+                    parts = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            # Prefer explicit text field
+                            if "text" in item:
+                                parts.append(str(item["text"]))
+                            elif item.get("type") == "text" and "content" in item:
+                                parts.append(str(item["content"]))
+                            else:
+                                # Fallback to string of dict
+                                parts.append(str(item))
+                        else:
+                            parts.append(str(item))
+                    return "\n".join([p for p in parts if p])
+                # OpenAI-style dict single part
+                if isinstance(content, dict):
+                    if "text" in content:
+                        return str(content["text"])
+                    if content.get("type") == "text" and "content" in content:
+                        return str(content["content"])
+                    return str(content)
+                # Already a string or other scalar
+                return str(content)
+            except Exception:
+                return str(content)
+
         # Get the last AI message
-        last_msg = session["messages"][-1]
-        response_content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
+        last_msg = session["messages"][ -1]
+        response_content = _to_text(getattr(last_msg, 'content', last_msg))
 
         # Build history for frontend
         history = [
             {
                 "role": "user" if isinstance(m, HumanMessage) else "bot",
-                "content": m.content if hasattr(m, 'content') else str(m)
+                "content": _to_text(getattr(m, 'content', m))
             }
             for m in session["messages"]
             if isinstance(m, (HumanMessage, AIMessage))
