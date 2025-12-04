@@ -72,14 +72,12 @@ cors_headers = ["Content-Type", "Authorization"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_origin_regex=settings.cors_allow_origin_regex,
-    allow_credentials=settings.cors_credentials,
-    allow_methods=cors_methods,
-    allow_headers=[*cors_headers, "X-Requested-With"],
-    expose_headers=["Content-Type", "Authorization"],
-    max_age=600,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 # Setup exception handlers
 setup_exception_handlers(app)
