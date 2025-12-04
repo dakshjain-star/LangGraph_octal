@@ -30,11 +30,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # CORS
-<<<<<<< HEAD
-    cors_origins: str = "https://nexus-esw7.onrender.com,http://localhost:3000,http://localhost:5173"
-=======
-    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
->>>>>>> 17d5d207ba0b0e4c4c3e5fe4352783a2fcb382aa
+    cors_origins: str = "https://nexus-esw7.onrender.com,http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
     cors_credentials: bool = True
     cors_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
     cors_headers: str = "Content-Type,Authorization"

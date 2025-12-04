@@ -170,7 +170,7 @@ async def upload_avatar(
     
     # Update user's avatar_url to the new file path
     # The URL will be served by the static file endpoint
-    avatar_url = f"http://localhost:8001/uploads/avatars/{unique_filename}"
+    avatar_url = f"https://nexus-backend-g0gm.onrender.com/uploads/avatars/{unique_filename}"
     current_user.avatar_url = avatar_url
     current_user.updated_at = datetime.utcnow()
     await current_user.save()

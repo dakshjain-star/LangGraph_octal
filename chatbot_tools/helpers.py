@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # dash_api base URL (where WebSocket connections are managed)
-DASH_API_BASE_URL = os.environ.get("DASH_API_URL", "http://localhost:8001")
+DASH_API_BASE_URL = os.environ.get("DASH_API_URL", "https://nexus-backend-g0gm.onrender.com")
 
 
 def set_main_loop(loop: asyncio.AbstractEventLoop):

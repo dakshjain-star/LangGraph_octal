@@ -20,7 +20,7 @@ async def _init_websocket_handlers(current_user: Dict[str, Any], credentials):
         jwt_token=jwt_token,
         user_id=user_id,
         company_id=company_id,
-        api_url="http://localhost:8001"
+        api_url="https://nexus-backend-g0gm.onrender.com"
     )
 
     # Wait briefly for connection to establish

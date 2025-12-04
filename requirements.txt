@@ -24,3 +24,5 @@ passlib[bcrypt]
 
 # Utilities
 bcrypt
+email-validator
+httpx

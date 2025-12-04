@@ -15,7 +15,7 @@ const Login = ({ onLogin }) => {
     setError('');
 
     try {
-      const res = await axios.post('http://localhost:8081/login', {
+      const res = await axios.post('https://nexus-chatbot-backend.onrender.com/login', {
         email,
         password
       });

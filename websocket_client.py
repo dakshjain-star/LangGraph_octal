@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class WebSocketUpdateHandler:
     """Handles real-time WebSocket updates from the API."""
     
-    def __init__(self, jwt_token: str, user_id: str, company_id: str, api_url: str = "http://localhost:8001"):
+    def __init__(self, jwt_token: str, user_id: str, company_id: str, api_url: str = "https://nexus-backend-g0gm.onrender.com"):
         """
         Initialize the WebSocket client handler.
         
@@ -352,7 +352,7 @@ async def get_or_create_ws_handler(
     jwt_token: str,
     user_id: str,
     company_id: str,
-    api_url: str = "http://localhost:8001"
+    api_url: str = "https://nexus-backend-g0gm.onrender.com"
 ) -> WebSocketUpdateHandler:
     """Get or create a WebSocket handler for a user."""
     if user_id not in _ws_handlers:
