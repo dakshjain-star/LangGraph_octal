@@ -25,6 +25,7 @@ class UserController:
         status: Optional[UserStatus] = None,
         role: Optional[UserRole] = None,
         search: Optional[str] = None,
+        company_id: Optional[str] = None,
         skip: int = 0,
         limit: int = 50,
         current_user: User = None
@@ -32,14 +33,30 @@ class UserController:
         """Get all users with optional filters."""
         query = {}
         
-        # Filter by company - users can only see users in their current company
-        # Search for users in both new and legacy company fields
-        if current_user and current_user.get_effective_company_id():
-            effective_company_id = current_user.get_effective_company_id()
-            query["$or"] = [
-                {"company_ids": effective_company_id},  # New field (array)
-                {"company_id": effective_company_id}     # Legacy field (single)
+        # Filter by company
+        target_company_id = None
+        
+        if company_id:
+            # If company_id is provided, check if user belongs to it
+            if current_user and company_id in (current_user.company_ids or []):
+                target_company_id = company_id
+            # Also check legacy company_id
+            elif current_user and current_user.company_id == company_id:
+                target_company_id = company_id
+            else:
+                # Unauthorized to view this company's users
+                return []
+        elif current_user:
+             # Default to current effective company
+             target_company_id = current_user.get_effective_company_id()
+        
+        if target_company_id:
+             query["$or"] = [
+                {"company_ids": target_company_id},
+                {"company_id": target_company_id}
             ]
+        else:
+             return []
         
         # Apply filters
         if status:

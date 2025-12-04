@@ -32,6 +32,7 @@ async def get_current_user(
         )
     
     token = credentials.credentials
+    logger.info(f"Verifying token: {token[:10]}...")
     
     # Verify token
     payload = verify_token(token, token_type="access")

@@ -26,12 +26,28 @@ class ProjectController:
         query = {}
         
         # Filter by company - users can only see projects in their own company
+        # Filter by company
+        target_company_id = None
+        
         if current_user:
-            effective_company_id = current_user.get_effective_company_id()
-            if effective_company_id:
-                query["company_id"] = effective_company_id
+            # If specific company requested, check authorization
+            if filter_data.company_id:
+                user_company_ids = current_user.company_ids or []
+                # Also check legacy company_id
+                if current_user.company_id:
+                    user_company_ids.append(current_user.company_id)
+                
+                if filter_data.company_id in user_company_ids:
+                    target_company_id = filter_data.company_id
+            
+            # Fallback to effective company if no specific company requested or authorized
+            if not target_company_id:
+                target_company_id = current_user.get_effective_company_id()
+            
+            if target_company_id:
+                query["company_id"] = target_company_id
             else:
-                # If no company, return empty list (shouldn't see any projects)
+                # If no company context, return empty list
                 return []
         
         # Apply filters

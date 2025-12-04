@@ -47,8 +47,7 @@ class MongoDB:
             
             logger.info("Successfully connected to MongoDB and initialized Beanie")
             
-            # Create indexes
-            await cls.create_indexes()
+            logger.info("Successfully connected to MongoDB and initialized Beanie")
             
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
@@ -60,49 +59,6 @@ class MongoDB:
         if cls.client:
             cls.client.close()
             logger.info("MongoDB connection closed")
-    
-    @classmethod
-    async def create_indexes(cls):
-        """Create database indexes for performance optimization."""
-        try:
-            from app.models.user import User
-            from app.models.project import Project
-            from app.models.task import Task
-            from app.models.comment import Comment
-            from app.models.task_history import TaskHistory
-            
-            # User indexes
-            await User.find_one().motor.create_index("email", unique=True)
-            await User.find_one().motor.create_index("status")
-            await User.find_one().motor.create_index("role")
-            
-            # Project indexes
-            await Project.find_one().motor.create_index("owner_id")
-            await Project.find_one().motor.create_index("status")
-            await Project.find_one().motor.create_index("due_date")
-            await Project.find_one().motor.create_index("client_name")
-            
-            # Task indexes
-            await Task.find_one().motor.create_index("assignee_id")
-            await Task.find_one().motor.create_index("creator_id")
-            await Task.find_one().motor.create_index("project_id")
-            await Task.find_one().motor.create_index("status")
-            await Task.find_one().motor.create_index("priority")
-            await Task.find_one().motor.create_index("due_date")
-            
-            # Comment indexes
-            await Comment.find_one().motor.create_index("task_id")
-            await Comment.find_one().motor.create_index("user_id")
-            
-            # TaskHistory indexes
-            await TaskHistory.find_one().motor.create_index("task_id")
-            await TaskHistory.find_one().motor.create_index("company_id")
-            await TaskHistory.find_one().motor.create_index("created_at")
-            
-            logger.info("Database indexes created successfully")
-            
-        except Exception as e:
-            logger.warning(f"Error creating indexes (may already exist): {e}")
     
     @classmethod
     def get_database(cls):

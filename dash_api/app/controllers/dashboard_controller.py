@@ -6,6 +6,7 @@ from datetime import datetime
 from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.project import Project, ProjectStatus
 from app.models.user import User
+from app.models.task_history import TaskHistory
 from app.schemas.dashboard import DashboardStats
 from app.schemas.project import ProjectResponse
 from app.schemas.task import TaskResponse
@@ -15,17 +16,31 @@ class DashboardController:
     """Dashboard controller for handling dashboard operations."""
     
     @staticmethod
-    async def get_dashboard_stats(current_user: User) -> DashboardStats:
+    async def get_dashboard_stats(current_user: User, company_id: str = None) -> DashboardStats:
         """Get aggregated dashboard statistics for current user."""
         today = datetime.utcnow().date()
         user_id = str(current_user.id)
-        company_id = current_user.get_effective_company_id()
+        
+        # Determine target company ID
+        target_company_id = None
+        if company_id:
+            # Verify user has access to this company
+            if company_id in (current_user.company_ids or []) or company_id == current_user.company_id:
+                target_company_id = company_id
+            else:
+                # Unauthorized or invalid company
+                return DashboardStats(
+                    tasks_completed=0, pending_tasks=0, high_priority_tasks=0,
+                    active_projects=0, overdue_tasks=0, tasks_in_progress=0
+                )
+        else:
+            target_company_id = current_user.get_effective_company_id()
         
         # Use aggregation for efficiency
         pipeline = [
             {
                 "$match": {
-                    "company_id": company_id,
+                    "company_id": target_company_id,
                     "$or": [
                         {"assignee_id": user_id},
                         {"creator_id": user_id}
@@ -76,7 +91,7 @@ class DashboardController:
         # Count overdue tasks manually (date comparison)
         overdue_tasks = await Task.find(
             Task.assignee_id == user_id,
-            Task.company_id == company_id,
+            Task.company_id == target_company_id,
             Task.status != TaskStatus.DONE
         ).to_list()
         
@@ -85,7 +100,7 @@ class DashboardController:
         # Count active projects where user is involved
         active_projects_count = await Project.find(
             Project.owner_id == user_id,
-            Project.company_id == company_id,
+            Project.company_id == target_company_id,
             Project.status == ProjectStatus.ACTIVE
         ).count()
         
@@ -99,15 +114,25 @@ class DashboardController:
         )
     
     @staticmethod
-    async def get_recent_projects(current_user: User, limit: int = 5) -> List[ProjectResponse]:
+    async def get_recent_projects(current_user: User, limit: int = 5, company_id: str = None) -> List[ProjectResponse]:
         """Get recent projects I own or am involved in."""
         user_id = str(current_user.id)
-        company_id = current_user.get_effective_company_id()
+        
+        # Determine target company ID
+        target_company_id = None
+        if company_id:
+            # Verify user has access to this company
+            if company_id in (current_user.company_ids or []) or company_id == current_user.company_id:
+                target_company_id = company_id
+            else:
+                return []
+        else:
+            target_company_id = current_user.get_effective_company_id()
         
         # Get projects owned by current user in their company
         projects = await Project.find(
             Project.owner_id == user_id,
-            Project.company_id == company_id,
+            Project.company_id == target_company_id,
             Project.status == ProjectStatus.ACTIVE
         ).sort([("updated_at", -1)]).limit(limit).to_list()
         
@@ -128,16 +153,26 @@ class DashboardController:
         ]
     
     @staticmethod
-    async def get_my_pending_tasks(current_user: User, limit: int = 5) -> List[TaskResponse]:
+    async def get_my_pending_tasks(current_user: User, limit: int = 5, company_id: str = None) -> List[TaskResponse]:
         """Get my pending tasks (not done), ordered by due_date."""
         user_id = str(current_user.id)
-        company_id = current_user.get_effective_company_id()
         today = datetime.utcnow().date()
+        
+        # Determine target company ID
+        target_company_id = None
+        if company_id:
+            # Verify user has access to this company
+            if company_id in (current_user.company_ids or []) or company_id == current_user.company_id:
+                target_company_id = company_id
+            else:
+                return []
+        else:
+            target_company_id = current_user.get_effective_company_id()
         
         # Get tasks assigned to me that are not done in my company
         tasks = await Task.find(
             Task.assignee_id == user_id,
-            Task.company_id == company_id,
+            Task.company_id == target_company_id,
             Task.status != TaskStatus.DONE
         ).sort([("due_date", 1)]).limit(limit).to_list()
         
@@ -168,3 +203,41 @@ class DashboardController:
             )
         
         return task_responses
+    
+    @staticmethod
+    async def get_recent_activity(current_user: User, limit: int = 10, company_id: str = None) -> List[dict]:
+        """Get recent activity for the user's company."""
+        # Determine target company ID
+        target_company_id = None
+        if company_id:
+            # Verify user has access to this company
+            if company_id in (current_user.company_ids or []) or company_id == current_user.company_id:
+                target_company_id = company_id
+            else:
+                return []
+        else:
+            target_company_id = current_user.get_effective_company_id()
+            
+        # Get recent history for the company (or personal if None)
+        history = await TaskHistory.find(
+            TaskHistory.company_id == target_company_id
+        ).sort([("created_at", -1)]).limit(limit).to_list()
+        
+        # Format response
+        activity_list = []
+        for item in history:
+            activity_list.append({
+                "id": str(item.id),
+                "task_id": item.task_id,
+                "action": item.action,
+                "field_name": item.field_name,
+                "old_value": item.old_value,
+                "new_value": item.new_value,
+                "user_id": item.user_id,
+                "user_name": item.user_name,
+                "user_avatar": item.user_avatar,
+                "company_id": item.company_id,
+                "created_at": item.created_at
+            })
+            
+        return activity_list

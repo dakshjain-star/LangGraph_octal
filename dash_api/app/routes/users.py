@@ -34,6 +34,7 @@ router = APIRouter()
 async def get_users(
     status_filter: Optional[List[UserStatus]] = Query(None, alias="status"),
     role: Optional[List[UserRole]] = Query(None),
+    company_id: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user)
@@ -42,6 +43,7 @@ async def get_users(
     Get all users with optional filtering:
     - **status**: Filter by user status (Active, Invited)
     - **role**: Filter by user role (Admin, Member, Viewer)
+    - **company_id**: Filter by company ID
     - **skip**: Number of records to skip (pagination)
     - **limit**: Maximum number of records to return
     
@@ -50,6 +52,7 @@ async def get_users(
     return await UserController.get_all_users(
         status=status_filter,
         role=role,
+        company_id=company_id,
         skip=skip,
         limit=limit,
         current_user=current_user

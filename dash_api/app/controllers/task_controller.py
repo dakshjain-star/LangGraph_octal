@@ -285,32 +285,43 @@ class TaskController:
         skip: int = 0,
         limit: int = 50,
         current_user: User = None,
-        all_companies: bool = False
+        all_companies: bool = False,
+        company_id: Optional[str] = None
     ) -> List[TaskResponse]:
         """Get all tasks with complex filtering.
         
         Args:
             all_companies: If True, show tasks from all companies user belongs to
+            company_id: Optional company ID to filter by. If None and no effective company, fetches personal tasks.
         """
         query = {}
         
         # Filter by company - users can see tasks based on all_companies flag
         if current_user:
-            if all_companies:
+            if company_id:
+                # Explicit company filter requested
+                # Verify user has access to this company
+                if company_id in (current_user.company_ids or []) or company_id == current_user.company_id:
+                    query["company_id"] = company_id
+                else:
+                    # Unauthorized
+                    return []
+            elif all_companies:
                 # Show tasks from all companies user is associated with
                 company_ids = current_user.get_effective_company_ids()
                 if company_ids:
                     query["company_id"] = {"$in": company_ids}
                 else:
-                    return []
+                    # No companies, show personal tasks
+                    query["company_id"] = None
             else:
                 # Default: only show tasks from current effective company
                 effective_company_id = current_user.get_effective_company_id()
                 if effective_company_id:
                     query["company_id"] = effective_company_id
                 else:
-                    # If no company, return empty list (shouldn't see any tasks)
-                    return []
+                    # If no company, assume Personal mode -> fetch tasks with company_id=None
+                    query["company_id"] = None
         
         # Apply filters
         if status:
@@ -512,14 +523,27 @@ class TaskController:
         if due_date and isinstance(due_date, date_type) and not isinstance(due_date, datetime):
             due_date = datetime.combine(due_date, datetime.min.time())
         
-        # Get company name
-        company_id = current_user.get_effective_company_id()
-        company_name = current_user.current_company_name
-        if company_id and not company_name:
-            # Look up company name if not available from user
-            company = await Company.get(company_id)
-            if company:
-                company_name = company.name
+        # Get company info - use provided company_id if valid, or None for individual/personal tasks
+        company_id = None
+        company_name = None
+        
+        # Check if a company_id was provided (including empty string check)
+        if data.company_id is not None and data.company_id != '':
+            # User specified a company - verify they're a member
+            user_company_ids = current_user.get_effective_company_ids()
+            if data.company_id in user_company_ids:
+                company_id = data.company_id
+                # Look up company name
+                company = await Company.get(company_id)
+                if company:
+                    company_name = company.name
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to create task for this company"
+                )
+        # If company_id is None or empty string, it's an individual/personal task
+        # company_id and company_name remain None
         
         # Build collaborators list from IDs (excluding assignee)
         collaborators = []
@@ -633,13 +657,12 @@ class TaskController:
                 detail="Not authorized to update this task"
             )
         
-        # Check permissions - creator, assignee, or admin can update
-        if (task.creator_id != str(current_user.id) and 
-            task.assignee_id != str(current_user.id) and 
-            current_user.role != UserRole.ADMIN):
+        # Check permissions - ONLY creator can update details
+        # (Admins and Assignees can only change status via update_task_status)
+        if task.creator_id != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to update this task"
+                detail="You cannot edit tasks created by users. You can only change the status."
             )
         
         # Update fields
@@ -685,6 +708,34 @@ class TaskController:
                 # Use the updated assignee_id if it's being changed, otherwise use existing
                 current_assignee_id = task.assignee_id
                 task.collaborators = await build_collaborators_from_ids(collaborator_ids, task.company_id, current_assignee_id)
+
+        # If company_id is being changed (including to None for individual tasks)
+        if "company_id" in update_data:
+            new_company_id = update_data.get("company_id")
+            if new_company_id is not None and new_company_id != '':
+                # Moving to a specific company - verify user is member
+                if new_company_id not in user_company_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Not authorized to move task to this company"
+                    )
+                task.company_id = new_company_id
+                if "company_name" in update_data:
+                    task.company_name = update_data.get("company_name")
+                else:
+                    # Look up the company name
+                    company = await Company.get(new_company_id)
+                    if company:
+                        task.company_name = company.name
+            else:
+                # Setting to Individual/Personal (no company)
+                task.company_id = None
+                task.company_name = None
+            
+            # Remove from update_data since we handled it
+            update_data.pop("company_id", None)
+            update_data.pop("company_name", None)
+
         
         # Convert date to datetime for Beanie compatibility
         if "due_date" in update_data and update_data["due_date"]:
@@ -992,16 +1043,6 @@ class TaskController:
         Args:
             all_companies: If True, show tasks from all companies user belongs to
         """
-        # Build company filter
-        if all_companies:
-            company_ids = current_user.get_effective_company_ids()
-            company_filter = {"$in": company_ids} if company_ids else None
-        else:
-            company_filter = current_user.get_effective_company_id()
-        
-        if not company_filter:
-            return []
-        
         # Build query
         query = {
             "assignee_id": str(current_user.id),
@@ -1009,9 +1050,19 @@ class TaskController:
         }
         
         if all_companies:
-            query["company_id"] = {"$in": current_user.get_effective_company_ids()}
+            company_ids = current_user.get_effective_company_ids()
+            if company_ids:
+                query["company_id"] = {"$in": company_ids}
+            else:
+                # No companies, show personal tasks
+                query["company_id"] = None
         else:
-            query["company_id"] = current_user.get_effective_company_id()
+            effective_company_id = current_user.get_effective_company_id()
+            if effective_company_id:
+                query["company_id"] = effective_company_id
+            else:
+                # Personal mode
+                query["company_id"] = None
         
         tasks = await Task.find(query).sort([("due_date", 1)]).limit(limit).to_list()
         
@@ -1074,13 +1125,15 @@ class TaskController:
             if company_ids:
                 query["company_id"] = {"$in": company_ids}
             else:
-                return []
+                # No companies, show personal tasks
+                query["company_id"] = None
         else:
             effective_company_id = current_user.get_effective_company_id()
             if effective_company_id:
                 query["company_id"] = effective_company_id
             else:
-                return []
+                # Personal mode
+                query["company_id"] = None
         
         tasks = await Task.find(query).sort([("created_at", -1)]).limit(limit).to_list()
         

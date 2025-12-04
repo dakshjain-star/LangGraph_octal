@@ -20,6 +20,7 @@ router = APIRouter()
     description="Get comprehensive dashboard statistics for the current user"
 )
 async def get_dashboard_stats(
+    company_id: str = None,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -31,9 +32,9 @@ async def get_dashboard_stats(
     - Overdue tasks
     - Tasks in progress
     
-    Statistics are personalized based on the current user.
+    Statistics are personalized based on the current user and optional company context.
     """
-    return await DashboardController.get_dashboard_stats(current_user)
+    return await DashboardController.get_dashboard_stats(current_user, company_id)
 
 
 @router.get(
@@ -44,6 +45,7 @@ async def get_dashboard_stats(
     description="Get recently updated projects"
 )
 async def get_recent_projects(
+    company_id: str = None,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -51,7 +53,7 @@ async def get_recent_projects(
     
     Returns the most recently updated projects, sorted by update date.
     """
-    return await DashboardController.get_recent_projects(current_user)
+    return await DashboardController.get_recent_projects(current_user, company_id=company_id)
 
 
 @router.get(
@@ -62,6 +64,7 @@ async def get_recent_projects(
     description="Get pending tasks assigned to the current user"
 )
 async def get_my_pending_tasks(
+    company_id: str = None,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -69,4 +72,23 @@ async def get_my_pending_tasks(
     
     Returns tasks with status "To Do" or "In Progress".
     """
-    return await DashboardController.get_my_pending_tasks(current_user)
+    return await DashboardController.get_my_pending_tasks(current_user, company_id=company_id)
+
+
+@router.get(
+    "/recent-activity",
+    response_model=List[dict],
+    status_code=status.HTTP_200_OK,
+    summary="Get recent activity",
+    description="Get recent activity for the user's company"
+)
+async def get_recent_activity(
+    company_id: str = None,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get recent activity for the user's company.
+    
+    Returns a list of recent actions (task creation, updates, etc.).
+    """
+    return await DashboardController.get_recent_activity(current_user, company_id=company_id)

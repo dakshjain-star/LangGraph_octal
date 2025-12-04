@@ -41,6 +41,7 @@ class TaskCreate(TaskBase):
     assignee_id: str
     collaborator_ids: List[str] = Field(default_factory=list)  # List of user IDs to add as collaborators
     status: TaskStatus = Field(default=TaskStatus.TODO)
+    company_id: Optional[str] = None  # Optional company ID, defaults to user's effective company
     
     class Config:
         json_schema_extra = {
@@ -66,6 +67,8 @@ class TaskUpdate(BaseModel):
     assignee_id: Optional[str] = None
     collaborator_ids: Optional[List[str]] = None  # List of user IDs - replaces all collaborators
     project_id: Optional[str] = None
+    company_id: Optional[str] = None
+    company_name: Optional[str] = None
 
 
 class TaskStatusUpdate(BaseModel):

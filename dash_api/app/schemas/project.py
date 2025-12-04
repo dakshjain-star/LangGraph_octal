@@ -85,6 +85,7 @@ class ProjectFilter(BaseModel):
     status: Optional[List[ProjectStatus]] = None
     owner_id: Optional[str] = None
     client_name: Optional[str] = None
+    company_id: Optional[str] = None
     search: Optional[str] = None
     sort_by: Optional[str] = "created_at"  # created_at, due_date
     sort_order: Optional[str] = "desc"  # asc, desc

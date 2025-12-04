@@ -41,6 +41,7 @@ async def get_tasks(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     all_companies: bool = Query(False, description="If true, show tasks from all companies user belongs to"),
+    company_id: Optional[str] = Query(None, description="Filter by specific company ID"),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -57,6 +58,7 @@ async def get_tasks(
     - **skip**: Number of records to skip (pagination)
     - **limit**: Maximum number of records to return
     - **all_companies**: If true, show tasks from all companies user belongs to
+    - **company_id**: Filter by specific company ID
     
     Requires authentication.
     """
@@ -73,7 +75,8 @@ async def get_tasks(
         skip=skip,
         limit=limit,
         current_user=current_user,
-        all_companies=all_companies
+        all_companies=all_companies,
+        company_id=company_id
     )
 
 
