@@ -31,7 +31,6 @@ class ProjectController:
         
         if current_user:
             # If all_companies is requested, return projects from all companies the user belongs to
-            print(f"DEBUG: all_companies={filter_data.all_companies}")
             if filter_data.all_companies:
                 user_company_ids = current_user.get_effective_company_ids()
                 user_company_names = current_user.company_names or []
@@ -39,9 +38,6 @@ class ProjectController:
                 # Add legacy company name if present
                 if current_user.company_name and current_user.company_name not in user_company_names:
                     user_company_names.append(current_user.company_name)
-                
-                print(f"DEBUG: user_company_ids={user_company_ids}")
-                print(f"DEBUG: user_company_names={user_company_names}")
                 
                 conditions = []
                 if user_company_ids:
