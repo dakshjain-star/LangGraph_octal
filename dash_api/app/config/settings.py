@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # CORS
-    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173,http://localhost:8001,http://127.0.0.1:8001"
     cors_credentials: bool = True
     cors_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
     cors_headers: str = "Content-Type,Authorization"
@@ -60,10 +60,14 @@ class Settings(BaseSettings):
     # Internal API secret for chatbot communication
     internal_api_secret: str = "chatbot-internal-secret"
     
+    # Google API
+    google_api_key: str = ""
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False
+        case_sensitive=False,
+        extra="ignore"
     )
     
     @property
