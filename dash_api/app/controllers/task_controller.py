@@ -649,9 +649,13 @@ class TaskController:
         # Store original assignee for notification tracking
         original_assignee_id = task.assignee_id
         
-        # Check company access - allow access from any of user's companies
+        # Check company access - allow access from any of user's companies OR personal tasks
         user_company_ids = current_user.get_effective_company_ids()
-        if task.company_id not in user_company_ids:
+        # Allow if: task is a personal task (company_id is None) OR task belongs to one of user's companies
+        is_personal_task = task.company_id is None
+        has_company_access = task.company_id in user_company_ids if task.company_id else False
+        
+        if not is_personal_task and not has_company_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this task"
