@@ -32,6 +32,7 @@ async def get_projects(
     client_name: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
+    all_companies: bool = Query(False),
     sort_by: str = Query("created_at"),
     sort_order: str = Query("desc"),
     skip: int = Query(0, ge=0),
@@ -44,6 +45,7 @@ async def get_projects(
     - **owner_id**: Filter by project owner
     - **client_name**: Filter by client name
     - **company_id**: Filter by company ID
+    - **all_companies**: If true, fetch projects from all companies the user belongs to
     - **search**: Search in project name and description
     - **sort_by**: Field to sort by (created_at, due_date)
     - **sort_order**: Sort order (asc, desc)
@@ -57,6 +59,7 @@ async def get_projects(
         owner_id=owner_id,
         client_name=client_name,
         company_id=company_id,
+        all_companies=all_companies,
         search=search,
         sort_by=sort_by,
         sort_order=sort_order,

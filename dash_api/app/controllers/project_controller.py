@@ -16,7 +16,7 @@ from app.services.websocket import (
     notify_project_created, notify_project_updated, notify_project_deleted
 )
 
-
+    
 class ProjectController:
     """Project controller for handling project operations."""
     
@@ -30,25 +30,49 @@ class ProjectController:
         target_company_id = None
         
         if current_user:
-            # If specific company requested, check authorization
-            if filter_data.company_id:
-                user_company_ids = current_user.company_ids or []
-                # Also check legacy company_id
-                if current_user.company_id:
-                    user_company_ids.append(current_user.company_id)
+            # If all_companies is requested, return projects from all companies the user belongs to
+            print(f"DEBUG: all_companies={filter_data.all_companies}")
+            if filter_data.all_companies:
+                user_company_ids = current_user.get_effective_company_ids()
+                user_company_names = current_user.company_names or []
                 
-                if filter_data.company_id in user_company_ids:
-                    target_company_id = filter_data.company_id
-            
-            # Fallback to effective company if no specific company requested or authorized
-            if not target_company_id:
-                target_company_id = current_user.get_effective_company_id()
-            
-            if target_company_id:
-                query["company_id"] = target_company_id
+                # Add legacy company name if present
+                if current_user.company_name and current_user.company_name not in user_company_names:
+                    user_company_names.append(current_user.company_name)
+                
+                print(f"DEBUG: user_company_ids={user_company_ids}")
+                print(f"DEBUG: user_company_names={user_company_names}")
+                
+                conditions = []
+                if user_company_ids:
+                    conditions.append({"company_id": {"$in": user_company_ids}})
+                if user_company_names:
+                    conditions.append({"company_name": {"$in": user_company_names}})
+                
+                if conditions:
+                    query["$or"] = conditions
+                else:
+                    return []
             else:
-                # If no company context, return empty list
-                return []
+                # If specific company requested, check authorization
+                if filter_data.company_id:
+                    user_company_ids = current_user.company_ids or []
+                    # Also check legacy company_id
+                    if current_user.company_id:
+                        user_company_ids.append(current_user.company_id)
+                    
+                    if filter_data.company_id in user_company_ids:
+                        target_company_id = filter_data.company_id
+                
+                # Fallback to effective company if no specific company requested or authorized
+                if not target_company_id:
+                    target_company_id = current_user.get_effective_company_id()
+                
+                if target_company_id:
+                    query["company_id"] = target_company_id
+                else:
+                    # If no company context, return empty list
+                    return []
         
         # Apply filters
         if filter_data.status:
@@ -92,6 +116,8 @@ class ProjectController:
                     owner_id=project.owner_id,
                     owner_name=project.owner_name,
                     client_name=project.client_name,
+                    company_id=project.company_id,
+                    company_name=project.company_name,
                     created_at=project.created_at,
                     updated_at=project.updated_at
                 )
@@ -125,6 +151,8 @@ class ProjectController:
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
+            company_id=project.company_id,
+            company_name=project.company_name,
             created_at=project.created_at,
             updated_at=project.updated_at
         )
@@ -172,6 +200,8 @@ class ProjectController:
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
+            company_id=project.company_id,
+            company_name=project.company_name,
             created_at=project.created_at,
             updated_at=project.updated_at
         )
@@ -249,6 +279,8 @@ class ProjectController:
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
+            company_id=project.company_id,
+            company_name=project.company_name,
             created_at=project.created_at,
             updated_at=project.updated_at
         )
@@ -305,6 +337,8 @@ class ProjectController:
             owner_id=project.owner_id,
             owner_name=project.owner_name,
             client_name=project.client_name,
+            company_id=project.company_id,
+            company_name=project.company_name,
             created_at=project.created_at,
             updated_at=project.updated_at
         )

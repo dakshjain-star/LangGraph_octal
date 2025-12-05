@@ -59,6 +59,8 @@ class ProjectResponse(ProjectBase):
     status: ProjectStatus
     owner_id: str
     owner_name: str
+    company_id: Optional[str] = None
+    company_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     
@@ -86,6 +88,7 @@ class ProjectFilter(BaseModel):
     owner_id: Optional[str] = None
     client_name: Optional[str] = None
     company_id: Optional[str] = None
+    all_companies: Optional[bool] = False
     search: Optional[str] = None
     sort_by: Optional[str] = "created_at"  # created_at, due_date
     sort_order: Optional[str] = "desc"  # asc, desc
