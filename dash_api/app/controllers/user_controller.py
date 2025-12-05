@@ -392,21 +392,17 @@ class UserController:
                 detail="Only admins can invite users"
             )
         
-        # Check if user exists (must be registered first)
+        # Check if user exists
         existing_user = await User.find_one(User.email == data.email)
-        if not existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User with this email is not registered. They must register first."
-            )
         
-        # Check if user is already in this company
-        existing_user_company_ids = existing_user.get_effective_company_ids() if hasattr(existing_user, 'get_effective_company_ids') else (existing_user.company_ids or ([existing_user.company_id] if existing_user.company_id else []))
-        if current_user.get_effective_company_id() in existing_user_company_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User is already a member of your company"
-            )
+        # If user exists, check if already in company
+        if existing_user:
+            existing_user_company_ids = existing_user.get_effective_company_ids() if hasattr(existing_user, 'get_effective_company_ids') else (existing_user.company_ids or ([existing_user.company_id] if existing_user.company_id else []))
+            if current_user.get_effective_company_id() in existing_user_company_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="User is already a member of your company"
+                )
         
         # Check if invitation already exists and is pending
         existing_invitation = await Invitation.find_one(
@@ -424,7 +420,7 @@ class UserController:
         effective_company_name = current_user.current_company_name or current_user.company_name
         invitation = Invitation(
             invitee_email=data.email,
-            invitee_user_id=str(existing_user.id),
+            invitee_user_id=str(existing_user.id) if existing_user else None,
             company_id=current_user.get_effective_company_id(),
             company_name=effective_company_name,
             inviter_id=str(current_user.id),
@@ -451,7 +447,7 @@ class UserController:
             expires_at=invitation.expires_at
         )
         
-        # Send real-time WebSocket notification to the invitee
+        # Send real-time WebSocket notification to the invitee if they exist
         invitation_data = invitation_response.model_dump()
         # Convert datetime objects and enums for JSON serialization
         if invitation_data.get('status'):
@@ -463,7 +459,8 @@ class UserController:
         if invitation_data.get('expires_at'):
             invitation_data['expires_at'] = invitation_data['expires_at'].isoformat() if hasattr(invitation_data['expires_at'], 'isoformat') else str(invitation_data['expires_at'])
         
-        await notify_user_invited(invitation_data, str(existing_user.id))
+        if existing_user:
+            await notify_user_invited(invitation_data, str(existing_user.id))
         
         return invitation_response
     async def search_users(query: str, current_user: User = None) -> List[UserResponse]:

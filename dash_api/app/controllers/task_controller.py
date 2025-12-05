@@ -708,10 +708,12 @@ class TaskController:
         # If collaborator_ids is being changed, rebuild the collaborators list
         if "collaborator_ids" in update_data:
             collaborator_ids = update_data.pop("collaborator_ids")
+            print(f"DEBUG: update_task received collaborator_ids: {collaborator_ids}")
             if collaborator_ids is not None:
                 # Use the updated assignee_id if it's being changed, otherwise use existing
                 current_assignee_id = task.assignee_id
                 task.collaborators = await build_collaborators_from_ids(collaborator_ids, task.company_id, current_assignee_id)
+                print(f"DEBUG: update_task set task.collaborators: {task.collaborators}")
 
         # If company_id is being changed (including to None for individual tasks)
         if "company_id" in update_data:
