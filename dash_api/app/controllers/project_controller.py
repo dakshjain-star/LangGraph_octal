@@ -29,6 +29,15 @@ class ProjectController:
         # Filter by company
         target_company_id = None
         
+        # Debug logging
+        print(f"[DEBUG] get_all_projects called")
+        print(f"[DEBUG] filter_data.company_id: {filter_data.company_id}")
+        print(f"[DEBUG] filter_data.all_companies: {filter_data.all_companies}")
+        if current_user:
+            print(f"[DEBUG] current_user.company_ids: {current_user.company_ids}")
+            print(f"[DEBUG] current_user.company_id: {current_user.company_id}")
+            print(f"[DEBUG] current_user.get_effective_company_ids(): {current_user.get_effective_company_ids()}")
+        
         if current_user:
             # If all_companies is requested, return projects from all companies the user belongs to
             if filter_data.all_companies:
@@ -52,16 +61,21 @@ class ProjectController:
             else:
                 # If specific company requested, check authorization
                 if filter_data.company_id:
-                    user_company_ids = current_user.company_ids or []
-                    # Also check legacy company_id
-                    if current_user.company_id:
-                        user_company_ids.append(current_user.company_id)
+                    # Use get_effective_company_ids() to include both new and legacy company fields
+                    user_company_ids = current_user.get_effective_company_ids()
+                    print(f"[DEBUG] Checking if {filter_data.company_id} in {user_company_ids}")
                     
                     if filter_data.company_id in user_company_ids:
                         target_company_id = filter_data.company_id
+                        print(f"[DEBUG] Authorized! target_company_id set to: {target_company_id}")
+                    else:
+                        # User is not authorized for this company - return empty list
+                        # Don't fall through to a different company
+                        print(f"[DEBUG] NOT authorized! Returning empty list")
+                        return []
                 
-                # Fallback to effective company if no specific company requested or authorized
-                if not target_company_id:
+                # Only fallback to effective company if no specific company was requested
+                if not target_company_id and not filter_data.company_id:
                     target_company_id = current_user.get_effective_company_id()
                 
                 if target_company_id:
@@ -69,6 +83,8 @@ class ProjectController:
                 else:
                     # If no company context, return empty list
                     return []
+        
+        print(f"[DEBUG] Final query: {query}")
         
         # Apply filters
         if filter_data.status:
