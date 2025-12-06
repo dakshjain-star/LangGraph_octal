@@ -310,7 +310,11 @@ class TaskController:
                 # Show tasks from all companies user is associated with
                 company_ids = current_user.get_effective_company_ids()
                 if company_ids:
-                    query["company_id"] = {"$in": company_ids}
+                    # Show tasks from user's companies OR personal tasks (no company)
+                    query["$or"] = [
+                        {"company_id": {"$in": company_ids}},
+                        {"company_id": None}
+                    ]
                 else:
                     # No companies, show personal tasks
                     query["company_id"] = None
@@ -438,8 +442,12 @@ class TaskController:
             )
         
         # Check company access - allow access from any of user's companies
+        # Personal tasks (company_id=None) are accessible
         user_company_ids = current_user.get_effective_company_ids()
-        if task.company_id not in user_company_ids:
+        is_personal_task = task.company_id is None
+        has_company_access = task.company_id in user_company_ids if task.company_id else False
+        
+        if not is_personal_task and not has_company_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"
@@ -1271,8 +1279,12 @@ class TaskController:
             )
         
         # Check company access - allow access from any of user's companies
+        # Personal tasks (company_id=None) are accessible
         user_company_ids = current_user.get_effective_company_ids()
-        if task.company_id not in user_company_ids:
+        is_personal_task = task.company_id is None
+        has_company_access = task.company_id in user_company_ids if task.company_id else False
+        
+        if not is_personal_task and not has_company_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this task's history"

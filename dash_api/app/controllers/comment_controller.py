@@ -26,8 +26,12 @@ class CommentController:
             )
         
         # Check company access - user can access if they belong to the task's company
+        # Personal tasks (company_id=None) are accessible to their creator/assignee
         user_company_ids = current_user.get_effective_company_ids()
-        if task.company_id not in user_company_ids:
+        is_personal_task = task.company_id is None
+        has_company_access = task.company_id in user_company_ids if task.company_id else False
+        
+        if not is_personal_task and not has_company_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"
@@ -63,8 +67,12 @@ class CommentController:
             )
         
         # Check company access - user can comment if they belong to the task's company
+        # Personal tasks (company_id=None) are accessible to their creator/assignee
         user_company_ids = current_user.get_effective_company_ids()
-        if task.company_id not in user_company_ids:
+        is_personal_task = task.company_id is None
+        has_company_access = task.company_id in user_company_ids if task.company_id else False
+        
+        if not is_personal_task and not has_company_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this task"
